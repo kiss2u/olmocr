@@ -708,19 +708,31 @@ async def sglang_server_ready():
     raise Exception("sglang server did not become ready after waiting.")
 
 
-async def download_model(model_name_or_path: str):
-    if model_name_or_path.startswith("s3://") or model_name_or_path.startswith("gs://") or model_name_or_path.startswith("weka://"):
-        logger.info(f"Downloading model directory from '{model_name_or_path}'")
-        model_cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "olmocr", "model")
-        download_directory([model_name_or_path], model_cache_dir)
-        return model_cache_dir
-    elif os.path.isabs(model_name_or_path) and os.path.isdir(model_name_or_path):
-        logger.info(f"Using local model path at '{model_name_or_path}'")
-        return model_name_or_path
-    else:
-        logger.info(f"Downloading model with hugging face '{model_name_or_path}'")
-        snapshot_download(repo_id=model_name_or_path)
-        return model_name_or_path
+async def download_model(model_name_or_path: str, max_retries: int=5):
+    for retry in range(max_retries):
+        try:
+            if model_name_or_path.startswith("s3://") or model_name_or_path.startswith("gs://") or model_name_or_path.startswith("weka://"):
+                logger.info(f"Downloading model directory from '{model_name_or_path}'")
+                model_cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "olmocr", "model")
+                # Delete existing model cache directory if it exists
+                if os.path.exists(model_cache_dir):
+                    shutil.rmtree(model_cache_dir)
+                download_directory([model_name_or_path], model_cache_dir)
+                return model_cache_dir
+            elif os.path.isabs(model_name_or_path) and os.path.isdir(model_name_or_path):
+                logger.info(f"Using local model path at '{model_name_or_path}'")
+                return model_name_or_path
+            else:
+                logger.info(f"Downloading model with hugging face '{model_name_or_path}'")
+                snapshot_download(repo_id=model_name_or_path)
+                return model_name_or_path
+        except Exception:
+            if retry == max_retries - 1:
+                raise # Raise on final attempt and fail the job
+
+            sleep_time = random.randrange(2, 20) * 2**retry
+            logger.exception(f"Could not download model, sleeping for {sleep_time} seconds to retry ({retry + 1}/{max_retries})")
+            await asyncio.sleep(random.randrange(10, 30) * 2**retry)
 
 
 async def metrics_reporter(work_queue):
@@ -1037,8 +1049,8 @@ async def main():
 
         # Wait a little bit so that not all beaker jobs in a task start at the same time and download the model at the same time
         replica_count = int(os.environ.get("BEAKER_REPLICA_COUNT", "1"))
-        interval = 10 if (replica_count - 1) * 10 <= 240 else 240 / max(1, replica_count - 1)
-        sleep_time = int(int(os.environ.get("BEAKER_REPLICA_RANK", "0")) * interval)
+        interval = 10 if (replica_count - 1) * 10 <= 30 else 30 / max(1, replica_count - 1)
+        sleep_time = int(os.environ.get("BEAKER_REPLICA_RANK", "0")) * interval
         logger.info(f"Beaker job sleeping for {sleep_time} seconds to stagger model downloads")
         await asyncio.sleep(sleep_time)
 
