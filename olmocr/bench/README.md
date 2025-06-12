@@ -37,7 +37,7 @@ to run it against your own OCR tools. Your tool just needs to support Markdown o
       <td align="left">GOT OCR</td>
       <td align="center">52.7</td>
       <td align="center">52.0</td>
-      <td align="center">0.2</td>
+      <td align="center">0.20</td>
       <td align="center">22.1</td>
       <td align="center">93.6</td>
       <td align="center">42.0</td>
@@ -46,16 +46,16 @@ to run it against your own OCR tools. Your tool just needs to support Markdown o
       <td align="center">48.3 ± 1.1</td>
     </tr>
     <tr>
-      <td align="left">Marker v1.6.2</td>
-      <td align="center">24.3</td>
-      <td align="center">22.1</td>
-      <td align="center">69.8</td>
-      <td align="center">24.3</td>
-      <td align="center">87.1</td>
-      <td align="center">71.0</td>
-      <td align="center">76.9</td>
-      <td align="center"><strong>99.5</strong></td>
-      <td align="center">59.4 ± 1.1</td>
+      <td align="left">Marker v1.7.5 (base)</td>
+      <td align="center">76.0</td>
+      <td align="center">57.9</td>
+      <td align="center">57.6</td>
+      <td align="center">27.8</td>
+      <td align="center">84.9</td>
+      <td align="center">72.9</td>
+      <td align="center">84.6</td>
+      <td align="center">99.1</td>
+      <td align="center">70.1 ± 1.1</td>
     </tr>
     <tr>
       <td align="left">MinerU v1.3.10</td>
@@ -78,7 +78,7 @@ to run it against your own OCR tools. Your tool just needs to support Markdown o
       <td align="center">93.6</td>
       <td align="center">71.3</td>
       <td align="center">77.1</td>
-      <td align="center">99.4</td>
+      <td align="center"><strong>99.4</strong></td>
       <td align="center">72.0 ± 1.1</td>
     </tr>
     <tr>
@@ -121,7 +121,7 @@ to run it against your own OCR tools. Your tool just needs to support Markdown o
       <td align="left">Gemini Flash 2 (Anchored)</td>
       <td align="center">54.5</td>
       <td align="center">56.1</td>
-      <td align="center"><strong>72.1</strong></td>
+      <td align="center">72.1</td>
       <td align="center">34.2</td>
       <td align="center">64.7</td>
       <td align="center">61.5</td>
@@ -157,7 +157,7 @@ to run it against your own OCR tools. Your tool just needs to support Markdown o
       <td align="left">olmOCR v0.1.68 (No Anchor)</td>
       <td align="center">72.1</td>
       <td align="center">74.7</td>
-      <td align="center">71.5</td>
+      <td align="center"><strong>71.5</strong></td>
       <td align="center">43.7</td>
       <td align="center">91.6</td>
       <td align="center">78.5</td>
@@ -288,6 +288,3 @@ We have an internal data annotation tool that can be used to review the question
 ```bash
 python -m olmocr.bench.review_app --port 5000 --debug ./olmOCR-bench/bench_data/multi_column.jsonl --force
 ```
-
-
-
