@@ -1,28 +1,14 @@
 #!/bin/bash
 
-# Runs an olmocr-bench run using the full pipeline (no fallback)
-#  Without model parameter (default behavior):, uses the default image from hugging face
-#   ./scripts/run_benchmark.sh
-#  With model parameter: for testing custom models
-#   ./scripts/run_benchmark.sh --model your-model-name
+# Runs marker benchmark, measuring both olmOCR-bench performance and per document processing performance
+#   ./scripts/run_marker_benchmark.sh
+#   ./scripts/run_marker_benchmark.sh 1.7.5
 
 set -e
 
 # Parse command line arguments
-MODEL=""
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        --model)
-            MODEL="$2"
-            shift 2
-            ;;
-        *)
-            echo "Unknown option: $1"
-            echo "Usage: $0 [--model MODEL_NAME]"
-            exit 1
-            ;;
-    esac
-done
+MARKER_VERSION="${1:-1.7.5}"
+echo "Using marker version: $MARKER_VERSION"
 
 # Check for uncommitted changes
 if ! git diff-index --quiet HEAD --; then
@@ -78,20 +64,16 @@ cat << 'EOF' > /tmp/run_benchmark_experiment.py
 import sys
 from beaker import Beaker, ExperimentSpec, TaskSpec, TaskContext, ResultSpec, TaskResources, ImageSource, Priority, Constraints, EnvVar
 
-# Get image tag, beaker user, git branch, git hash, and optional model from command line
+# Get image tag, beaker user, git branch, git hash, and marker version from command line
 image_tag = sys.argv[1]
 beaker_user = sys.argv[2]
 git_branch = sys.argv[3]
 git_hash = sys.argv[4]
-model = sys.argv[5] if len(sys.argv) > 5 else None
+marker_version = sys.argv[5]
 
 # Initialize Beaker client
 b = Beaker.from_env(default_workspace="ai2/olmocr")
 
-# Build the pipeline command with optional model parameter
-pipeline_cmd = "python -m olmocr.pipeline ./localworkspace --markdown --pdfs ./olmOCR-bench/bench_data/pdfs/**/*.pdf"
-if model:
-    pipeline_cmd += f" --model {model}"
 
 # Check if AWS credentials secret exists
 aws_creds_secret = f"{beaker_user}-AWS_CREDENTIALS_FILE"
@@ -114,14 +96,15 @@ if has_aws_creds:
 commands.extend([
     "git clone https://huggingface.co/datasets/allenai/olmOCR-bench",
     "cd olmOCR-bench && git lfs pull && cd ..",
-    pipeline_cmd,
-    "python olmocr/bench/scripts/workspace_to_bench.py localworkspace/ olmOCR-bench/bench_data/olmocr --bench-path ./olmOCR-bench/",
+    f"pip install marker-pdf=={marker_version}",
+    "pip install --upgrade torchvision",
+    "python -m olmocr.bench.convert marker --dir ./olmOCR-bench/bench_data",
     "python -m olmocr.bench.benchmark --dir ./olmOCR-bench/bench_data"
 ])
 
 # Build task spec with optional env vars
 task_spec_args = {
-    "name": "olmocr-benchmark",
+    "name": "marker-benchmark",
     "image": ImageSource(beaker=f"{beaker_user}/{image_tag}"),
     "command": [
         "bash", "-c",
@@ -144,7 +127,7 @@ if has_aws_creds:
 
 # Create first experiment spec
 experiment_spec = ExperimentSpec(
-    description=f"OlmOCR Benchmark Run - Branch: {git_branch}, Commit: {git_hash}",
+    description=f"Marker {marker_version} Benchmark Run - Branch: {git_branch}, Commit: {git_hash}",
     budget="ai2/oe-data",
     tasks=[TaskSpec(**task_spec_args)],
 )
@@ -156,10 +139,6 @@ print(f"View at: https://beaker.org/ex/{experiment.id}")
 print("-------")
 print("")
 
-# Second experiment: Performance test job
-perf_pipeline_cmd = "python -m olmocr.pipeline ./localworkspace --markdown --pdfs s3://ai2-oe-data/jakep/olmocr/olmOCR-mix-0225/benchmark_set/*.pdf"
-if model:
-    perf_pipeline_cmd += f" --model {model}"
 
 perf_commands = []
 if has_aws_creds:
@@ -167,11 +146,19 @@ if has_aws_creds:
         "mkdir -p ~/.aws",
         'echo "$AWS_CREDENTIALS_FILE" > ~/.aws/credentials'
     ])
-perf_commands.append(perf_pipeline_cmd)
+perf_commands.extend([
+    f"pip install marker-pdf=={marker_version}",
+    "pip install --upgrade torchvision",
+    "pip install awscli",
+    "aws s3 cp --recursive s3://ai2-oe-data/jakep/olmocr/olmOCR-mix-0225/benchmark_set/ /root/olmOCR-mix-0225_benchmark_set/",
+    # Tried with workers 8, but it was taking a really huge amount of time
+    #"time marker --force_ocr /root/olmOCR-mix-0225_benchmark_set/ --output_dir /root/olmOCR-mix-0225_benchmark_set_marker --workers 8"
+    "time marker --force_ocr /root/olmOCR-mix-0225_benchmark_set/ --output_dir /root/olmOCR-mix-0225_benchmark_set_marker"
+])
 
 # Build performance task spec
 perf_task_spec_args = {
-    "name": "olmocr-performance",
+    "name": "marker-performance",
     "image": ImageSource(beaker=f"{beaker_user}/{image_tag}"),
     "command": [
         "bash", "-c",
@@ -194,7 +181,7 @@ if has_aws_creds:
 
 # Create performance experiment spec
 perf_experiment_spec = ExperimentSpec(
-    description=f"OlmOCR Performance Test - Branch: {git_branch}, Commit: {git_hash}",
+    description=f"Marker {marker_version} Performance Test - Branch: {git_branch}, Commit: {git_hash}",
     budget="ai2/oe-data",
     tasks=[TaskSpec(**perf_task_spec_args)],
 )
@@ -207,12 +194,7 @@ EOF
 
 # Run the Python script to create the experiments
 echo "Creating Beaker experiments..."
-if [ -n "$MODEL" ]; then
-    echo "Using model: $MODEL"
-    $PYTHON /tmp/run_benchmark_experiment.py $IMAGE_TAG $BEAKER_USER $GIT_BRANCH $GIT_HASH "$MODEL"
-else
-    $PYTHON /tmp/run_benchmark_experiment.py $IMAGE_TAG $BEAKER_USER $GIT_BRANCH $GIT_HASH
-fi
+$PYTHON /tmp/run_benchmark_experiment.py $IMAGE_TAG $BEAKER_USER $GIT_BRANCH $GIT_HASH $MARKER_VERSION
 
 # Clean up temporary file
 rm /tmp/run_benchmark_experiment.py

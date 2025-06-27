@@ -20,6 +20,7 @@ olmOCR-bench/*
 table_data*/
 /synth*/
 dolma_samples/*
+old_train/
 /*.html
 scoreelo.csv
 debug.log
