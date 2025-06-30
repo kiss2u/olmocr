@@ -72,6 +72,34 @@ class MetricsKeeper:
 
         return "\n".join(lines)
 
+    def get_total_metrics(self):
+        """
+        Returns the total cumulative metrics since the MetricsKeeper was created.
+
+        Returns:
+            dict: Dictionary of metric names to their total values.
+        """
+        return dict(self.total_metrics)
+
+    def get_metrics_summary(self):
+        """
+        Returns a summary of metrics including totals and rates.
+
+        Returns:
+            dict: Dictionary containing total metrics and overall rates.
+        """
+        current_time = time.time()
+        elapsed_time = current_time - self.start_time
+
+        summary = {"elapsed_time_seconds": elapsed_time, "total_metrics": dict(self.total_metrics), "rates": {}}
+
+        # Calculate rates for each metric
+        if elapsed_time > 0:
+            for key, value in self.total_metrics.items():
+                summary["rates"][f"{key}_per_sec"] = value / elapsed_time
+
+        return summary
+
 
 class WorkerTracker:
     def __init__(self):
