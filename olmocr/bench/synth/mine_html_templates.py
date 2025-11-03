@@ -21,6 +21,9 @@ from playwright.async_api import async_playwright
 from syntok.segmenter import process
 from tqdm import tqdm
 
+from wordfreq import zipf_frequency
+
+
 from olmocr.bench.tests import TableTest, TestType, normalize_text, parse_html_tables, TextPresenceTest, BaselineTest
 from olmocr.data.renderpdf import (
     get_png_dimensions_from_base64,
@@ -1052,6 +1055,10 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
     # Convert HTML to markdown to get cleaner text for presence and ordering tests
     markdown_content = html_to_markdown_with_frontmatter(html_content)
 
+    # Extract language from HTML metadata for wordfreq
+    metadata = extract_html_metadata(html_content)
+    primary_language = metadata.get('primary_language', 'en')
+
     # Remove any HTML tables from the markdown content
     # Tables can persist in markdown as raw HTML and we want to exclude them
     markdown_content = re.sub(r"<table[^>]*>.*?</table>", "", markdown_content, flags=re.DOTALL | re.IGNORECASE)
@@ -1149,6 +1156,7 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
 
     word_counter = Counter()
     number_counter = Counter()
+    word_rarities = {}  # Store Zipf frequencies for words
 
     # Split on whitespace and check each token
     tokens = markdown_text.split()
@@ -1173,12 +1181,35 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
             if len(token_lower) >= 4:  # Only count words with at least 4 characters
                 word_counter[token_lower] += 1
 
+                # Calculate Zipf frequency if wordfreq is available
+                if token_lower not in word_rarities:
+                    # Get Zipf frequency (0-8 scale, higher = more common)
+                    # Use primary_language if it's a valid 2-letter code
+                    lang_code = primary_language if len(primary_language) == 2 else 'en'
+                    try:
+                        zipf = zipf_frequency(token_lower, lang_code)
+                        word_rarities[token_lower] = zipf
+                    except:
+                        # If language not supported or error, use default
+                        word_rarities[token_lower] = 4.0  # Assume moderately common
+
     # Collect rarest items first
     rarest_items = []
 
-    # Get the 10 least common words
-    sorted_words = sorted(word_counter.items(), key=lambda x: x[1])
-    rarest_words = [word for word, _ in sorted_words[:10]]
+    if word_rarities:
+        # Filter for truly rare words (Zipf frequency ≤ 3)
+        rare_words_with_zipf = [(word, zipf) for word, zipf in word_rarities.items() if zipf <= 3.0]
+
+        # Sort by Zipf frequency (ascending = rarest first), then by count
+        rare_words_with_zipf.sort(key=lambda x: (x[1], word_counter[x[0]]))
+
+        # Take up to 10 rarest words
+        rarest_words = [word for word, _ in rare_words_with_zipf[:10]]
+    else:
+        # Fallback to old method if wordfreq not available
+        # Get the 10 least common words
+        sorted_words = sorted(word_counter.items(), key=lambda x: x[1])
+        rarest_words = [word for word, _ in sorted_words[:10]]
 
     # Shuffle the rarest words
     random_gen.shuffle(rarest_words)
