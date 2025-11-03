@@ -10,7 +10,7 @@ import re
 import subprocess
 import tempfile
 import uuid
-from collections import defaultdict
+from collections import defaultdict, Counter
 from typing import Dict, List
 
 import pypdf
@@ -21,7 +21,7 @@ from playwright.async_api import async_playwright
 from syntok.segmenter import process
 from tqdm import tqdm
 
-from olmocr.bench.tests import TableTest, TestType, normalize_text, parse_html_tables
+from olmocr.bench.tests import TableTest, TestType, normalize_text, parse_html_tables, TextPresenceTest, BaselineTest
 from olmocr.data.renderpdf import (
     get_png_dimensions_from_base64,
     render_pdf_to_base64png,
@@ -979,32 +979,32 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
 
             if rowcol in table_data.up_relations and len(table_data.up_relations[rowcol]) > 0:
                 relation = random_gen.choice(list(table_data.up_relations[rowcol]))
-                if len(table_data.cell_text[relation].strip()) > 1 and "\n" not in table_data.cell_text[relation]:
+                if len(table_data.cell_text[relation].strip()) > 0 and "\n" not in table_data.cell_text[relation]:
                     test_data["up"] = normalize_text(table_data.cell_text[relation])
 
             if rowcol in table_data.down_relations and len(table_data.down_relations[rowcol]) > 0:
                 relation = random_gen.choice(list(table_data.down_relations[rowcol]))
-                if len(table_data.cell_text[relation].strip()) > 1 and "\n" not in table_data.cell_text[relation]:
+                if len(table_data.cell_text[relation].strip()) > 0 and "\n" not in table_data.cell_text[relation]:
                     test_data["down"] = normalize_text(table_data.cell_text[relation])
 
             if rowcol in table_data.left_relations and len(table_data.left_relations[rowcol]) > 0:
                 relation = random_gen.choice(list(table_data.left_relations[rowcol]))
-                if len(table_data.cell_text[relation].strip()) > 1 and "\n" not in table_data.cell_text[relation]:
+                if len(table_data.cell_text[relation].strip()) > 0 and "\n" not in table_data.cell_text[relation]:
                     test_data["left"] = normalize_text(table_data.cell_text[relation])
 
             if rowcol in table_data.right_relations and len(table_data.right_relations[rowcol]) > 0:
                 relation = random_gen.choice(list(table_data.right_relations[rowcol]))
-                if len(table_data.cell_text[relation].strip()) > 1 and "\n" not in table_data.cell_text[relation]:
+                if len(table_data.cell_text[relation].strip()) > 0 and "\n" not in table_data.cell_text[relation]:
                     test_data["right"] = normalize_text(table_data.cell_text[relation])
 
             if len(table_data.left_heading_relations(*rowcol)) > 0:
                 relation = random_gen.choice(list(table_data.left_heading_relations(*rowcol)))
-                if len(table_data.cell_text[relation].strip()) > 1 and "\n" not in table_data.cell_text[relation]:
+                if len(table_data.cell_text[relation].strip()) > 0 and "\n" not in table_data.cell_text[relation]:
                     test_data["left_heading"] = normalize_text(table_data.cell_text[relation])
 
             if len(table_data.top_heading_relations(*rowcol)) > 0:
                 relation = random_gen.choice(list(table_data.top_heading_relations(*rowcol)))
-                if len(table_data.cell_text[relation].strip()) > 1 and "\n" not in table_data.cell_text[relation]:
+                if len(table_data.cell_text[relation].strip()) > 0 and "\n" not in table_data.cell_text[relation]:
                     test_data["top_heading"] = normalize_text(table_data.cell_text[relation])
 
             # Only add the test if we have at least one relation
@@ -1144,6 +1144,98 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
         if num_order_tests > 5:
             break
 
+    # Go through the top 10 rarest words (any chars permitted), and also the top 5 rarest numbers (only numeric chars allowed)
+    # And add those as TestType.PRESENT.value, and also run the test to check that it passes before adding
+
+    word_counter = Counter()
+    number_counter = Counter()
+
+    # Split on whitespace and check each token
+    tokens = markdown_text.split()
+
+    # Pattern for numbers: optional minus, digits, optional decimal point and more digits
+    number_pattern = re.compile(r'^-?\d+(?:\.\d+)?$')
+
+    for token in tokens:
+        # Strip common punctuation from ends
+        token_cleaned = token.strip('.,;:!?"\'()')
+
+        if not token_cleaned:
+            continue
+
+        # Check if it's a number
+        if number_pattern.match(token_cleaned):
+            if len(token_cleaned) >= 2:  # Only count numbers with at least 2 characters
+                number_counter[token_cleaned] += 1
+        # Check if it's a word (has at least one alphabetic character)
+        elif any(c.isalpha() for c in token_cleaned):
+            token_lower = token_cleaned.lower()
+            if len(token_lower) >= 4:  # Only count words with at least 4 characters
+                word_counter[token_lower] += 1
+
+    # Collect rarest items first
+    rarest_items = []
+
+    # Get the 10 least common words
+    sorted_words = sorted(word_counter.items(), key=lambda x: x[1])
+    rarest_words = [word for word, _ in sorted_words[:10]]
+
+    # Shuffle the rarest words
+    random_gen.shuffle(rarest_words)
+
+    # Add rarest words to the list with their type
+    for word in rarest_words:
+        rarest_items.append((word, "present_word"))
+
+    # Get the 5 least common numbers
+    sorted_numbers = sorted(number_counter.items(), key=lambda x: x[1])
+    rarest_numbers = [num for num, _ in sorted_numbers[:5]]
+
+    # Shuffle the rarest numbers
+    random_gen.shuffle(rarest_numbers)
+
+    # Add rarest numbers to the list with their type
+    for number in rarest_numbers:
+        rarest_items.append((number, "present_num"))
+
+    # Now create and validate presence tests for all rare items
+    for test_text, test_id_prefix in rarest_items:
+        # Normalize the test text
+        normalized_text = normalize_text(test_text)
+
+        if not normalized_text or len(normalized_text) < 2:
+            continue
+
+        # Create test data
+        test_data = {
+            "pdf": pdf_filename,
+            "page": 1,
+            "id": f"{pdf_id}_{test_id_prefix}_{uuid.uuid4().hex[:8]}",
+            "type": TestType.PRESENT.value,
+            "text": test_text,
+            "max_diffs": 0,
+        }
+
+        # Create test object to validate
+        try:
+            test_obj = TextPresenceTest(
+                pdf=test_data["pdf"],
+                page=test_data["page"],
+                id=test_data["id"],
+                type=test_data["type"],
+                text=test_data["text"],
+                max_diffs=test_data["max_diffs"]
+            )
+
+            # Run the test against the markdown content
+            passed, _ = test_obj.run(markdown_text)
+
+            if passed:
+                tests.append(test_data)
+        except Exception:
+            # Skip if test creation or validation fails
+            pass
+
     # Step 4: Generate Math tests for LaTeX equations from the markdown
 
     # Define math patterns to search for
@@ -1258,6 +1350,42 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
         if test_signature not in test_signatures:
             test_signatures.add(test_signature)
             unique_tests.append(test)
+
+    # Add a single BaselineTest for this page
+    # First, check if the markdown content would fail due to disallowed characters
+    baseline_test_data = {
+        "pdf": pdf_filename,
+        "page": 1,
+        "id": f"{pdf_id}_baseline_{uuid.uuid4().hex[:8]}",
+        "type": "baseline",
+        "max_repeats": 30,
+        "check_disallowed_characters": True,
+    }
+
+    # Create a baseline test object to check if disallowed characters are present
+    try:
+        baseline_test_obj = BaselineTest(
+            pdf=baseline_test_data["pdf"],
+            page=baseline_test_data["page"],
+            id=baseline_test_data["id"],
+            type=baseline_test_data["type"],
+            max_repeats=baseline_test_data["max_repeats"],
+            check_disallowed_characters=True
+        )
+
+        # Run the test with check_disallowed_characters=True
+        passed, explanation = baseline_test_obj.run(markdown_content)
+
+        # If it failed due to disallowed characters, set check_disallowed_characters=False
+        if not passed and "disallowed characters" in explanation:
+            baseline_test_data["check_disallowed_characters"] = False
+
+    except Exception:
+        # If there was an error creating/running the test, keep default settings
+        pass
+
+    # Add the baseline test to the list
+    unique_tests.append(baseline_test_data)
 
     return unique_tests
 
