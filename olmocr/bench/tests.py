@@ -27,6 +27,7 @@ class TestType(str, Enum):
     ORDER = "order"
     TABLE = "table"
     MATH = "math"
+    FORMAT = "format"
 
 
 class TestChecked(str, Enum):
@@ -217,6 +218,124 @@ class TextOrderTest(BasePDFTest):
                 if before_match.start < after_match.start:
                     return True, ""
         return False, (f"Could not find a location where '{self.before[:40]}...' appears before " f"'{self.after[:40]}...'.")
+
+
+@dataclass
+class FormatTest(BasePDFTest):
+    """
+    Test to verify that specific text appears with the correct formatting.
+
+    Attributes:
+        text: The text to search for.
+        format: The expected format ("heading", "bold", or "italic").
+    """
+
+    text: str
+    format: str
+    case_sensitive: bool = True
+
+    def __post_init__(self):
+        super().__post_init__()
+        if self.type != TestType.FORMAT.value:
+            raise ValidationError(f"Invalid type for FormatTest: {self.type}")
+        self.text = normalize_text(self.text)
+        if not self.text.strip():
+            raise ValidationError("Text field cannot be empty")
+        if self.format not in {"heading", "bold", "italic"}:
+            raise ValidationError(f"Invalid format type: {self.format}. Must be 'heading', 'bold', or 'italic'")
+
+    def run(self, md_content: str) -> Tuple[bool, str]:
+        """
+        Extract all text with the specified format and check if our text is among them.
+        """
+        # Store the original content before any normalization for pattern matching
+        original_content = md_content
+
+        # Extract formatted text based on the format type
+        formatted_texts = []
+
+        if self.format == "heading":
+            # Markdown headings (# through ######)
+            heading_patterns = [
+                r'^#{1,6}\s+(.+?)$',  # Standard markdown headings
+            ]
+            for pattern in heading_patterns:
+                matches = re.findall(pattern, original_content, re.MULTILINE)
+                formatted_texts.extend(matches)
+
+            # HTML headings (<h1> through <h6>)
+            html_heading_pattern = r'<h[1-6][^>]*>(.*?)</h[1-6]>'
+            matches = re.findall(html_heading_pattern, original_content, re.IGNORECASE | re.DOTALL)
+            formatted_texts.extend(matches)
+
+        elif self.format == "bold":
+            # Markdown bold patterns
+            bold_patterns = [
+                r'\*\*(.*?)\*\*',  # **text**
+                r'__(.*?)__',      # __text__
+            ]
+            for pattern in bold_patterns:
+                matches = re.findall(pattern, original_content, re.DOTALL)
+                formatted_texts.extend(matches)
+
+            # HTML bold patterns
+            html_bold_patterns = [
+                r'<b[^>]*>(.*?)</b>',         # <b>text</b>
+                r'<strong[^>]*>(.*?)</strong>' # <strong>text</strong>
+            ]
+            for pattern in html_bold_patterns:
+                matches = re.findall(pattern, original_content, re.IGNORECASE | re.DOTALL)
+                formatted_texts.extend(matches)
+
+        elif self.format == "italic":
+            # Markdown italic patterns - be careful not to match bold
+            # We need to match single * or _ that are not part of ** or __
+            italic_patterns = [
+                r'(?<!\*)\*(?!\*)(.*?)(?<!\*)\*(?!\*)',  # *text* but not **text**
+                r'(?<!_)_(?!_)(.*?)(?<!_)_(?!_)',         # _text_ but not __text__
+            ]
+            for pattern in italic_patterns:
+                matches = re.findall(pattern, original_content, re.DOTALL)
+                formatted_texts.extend(matches)
+
+            # HTML italic patterns
+            html_italic_patterns = [
+                r'<i[^>]*>(.*?)</i>',       # <i>text</i>
+                r'<em[^>]*>(.*?)</em>'       # <em>text</em>
+            ]
+            for pattern in html_italic_patterns:
+                matches = re.findall(pattern, original_content, re.IGNORECASE | re.DOTALL)
+                formatted_texts.extend(matches)
+
+        # Normalize all extracted formatted texts
+        normalized_formatted_texts = [normalize_text(text) for text in formatted_texts]
+
+        # Normalize the search text
+        search_text = self.text
+        if not self.case_sensitive:
+            search_text = search_text.lower()
+            normalized_formatted_texts = [text.lower() for text in normalized_formatted_texts]
+
+        # Check if the text appears in any of the formatted texts using fuzzy matching
+        threshold = 1.0 - (self.max_diffs / (len(search_text) if len(search_text) > 0 else 1))
+
+        for formatted_text in normalized_formatted_texts:
+            # Use partial_ratio for substring matching
+            ratio = fuzz.partial_ratio(search_text, formatted_text) / 100.0
+            if ratio >= threshold:
+                return True, ""
+
+        # If we didn't find the text with the specified format
+        found_formats = []
+        if len(normalized_formatted_texts) > 0:
+            # Show a sample of what we did find with this format
+            sample = normalized_formatted_texts[:3]
+            sample_str = ", ".join([f"'{t[:20]}...'" if len(t) > 20 else f"'{t}'" for t in sample])
+            found_formats.append(f"Found {self.format} text: {sample_str}")
+        else:
+            found_formats.append(f"No {self.format} formatted text found")
+
+        return False, f"Text '{self.text[:40]}...' not found with {self.format} formatting. {'; '.join(found_formats)}"
 
 
 @dataclass
@@ -527,6 +646,8 @@ def load_single_test(data: Union[str, Dict]) -> BasePDFTest:
         test = MathTest(**data)
     elif test_type == TestType.BASELINE.value:
         test = BaselineTest(**data)
+    elif test_type == TestType.FORMAT.value:
+        test = FormatTest(**data)
     else:
         raise ValidationError(f"Unknown test type: {test_type}")
 

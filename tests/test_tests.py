@@ -3,6 +3,7 @@ import unittest
 from olmocr.bench.tests import (
     BaselineTest,
     BasePDFTest,
+    FormatTest,
     MathTest,
     TableTest,
     TestChecked,
@@ -1607,6 +1608,343 @@ class TestMathTest(unittest.TestCase):
                 self.assertTrue(result)
         except Exception as e:
             self.fail(f"Test failed with: {e}")
+
+
+class TestFormatTest(unittest.TestCase):
+    """Test the FormatTest class"""
+
+    def test_valid_initialization(self):
+        """Test that valid initialization works"""
+        test = FormatTest(
+            pdf="test.pdf",
+            page=1,
+            id="test_id",
+            type=TestType.FORMAT.value,
+            text="Important Title",
+            format="heading"
+        )
+        self.assertEqual(test.text, "Important Title")
+        self.assertEqual(test.format, "heading")
+        self.assertTrue(test.case_sensitive)
+
+    def test_invalid_test_type(self):
+        """Test that invalid test type raises ValidationError"""
+        with self.assertRaises(ValidationError):
+            FormatTest(
+                pdf="test.pdf",
+                page=1,
+                id="test_id",
+                type=TestType.PRESENT.value,
+                text="test text",
+                format="bold"
+            )
+
+    def test_empty_text(self):
+        """Test that empty text raises ValidationError"""
+        with self.assertRaises(ValidationError):
+            FormatTest(
+                pdf="test.pdf",
+                page=1,
+                id="test_id",
+                type=TestType.FORMAT.value,
+                text="",
+                format="heading"
+            )
+
+    def test_invalid_format_type(self):
+        """Test that invalid format type raises ValidationError"""
+        with self.assertRaises(ValidationError):
+            FormatTest(
+                pdf="test.pdf",
+                page=1,
+                id="test_id",
+                type=TestType.FORMAT.value,
+                text="test text",
+                format="underline"  # Not supported
+            )
+
+    def test_markdown_heading(self):
+        """Test detection of markdown headings"""
+        test = FormatTest(
+            pdf="test.pdf",
+            page=1,
+            id="test_id",
+            type=TestType.FORMAT.value,
+            text="Chapter One",
+            format="heading"
+        )
+
+        # Test various heading levels
+        content = "# Chapter One\nSome text here"
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        content = "## Chapter One\nSome text here"
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        content = "### Chapter One\nSome text here"
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+    def test_html_heading(self):
+        """Test detection of HTML headings"""
+        test = FormatTest(
+            pdf="test.pdf",
+            page=1,
+            id="test_id",
+            type=TestType.FORMAT.value,
+            text="Chapter One",
+            format="heading"
+        )
+
+        # Test various HTML heading tags
+        content = "<h1>Chapter One</h1>\nSome text here"
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        content = "<h3>Chapter One</h3>\nSome text here"
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+    def test_markdown_bold(self):
+        """Test detection of markdown bold text"""
+        test = FormatTest(
+            pdf="test.pdf",
+            page=1,
+            id="test_id",
+            type=TestType.FORMAT.value,
+            text="important",
+            format="bold"
+        )
+
+        # Test ** syntax
+        content = "This is **important** text"
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        # Test __ syntax
+        content = "This is __important__ text"
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        # Should not match if not bold
+        content = "This is important text"
+        result, explanation = test.run(content)
+        self.assertFalse(result)
+        self.assertIn("not found with bold formatting", explanation)
+
+    def test_html_bold(self):
+        """Test detection of HTML bold text"""
+        test = FormatTest(
+            pdf="test.pdf",
+            page=1,
+            id="test_id",
+            type=TestType.FORMAT.value,
+            text="important",
+            format="bold"
+        )
+
+        # Test <b> tag
+        content = "This is <b>important</b> text"
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        # Test <strong> tag
+        content = "This is <strong>important</strong> text"
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+    def test_markdown_italic(self):
+        """Test detection of markdown italic text"""
+        test = FormatTest(
+            pdf="test.pdf",
+            page=1,
+            id="test_id",
+            type=TestType.FORMAT.value,
+            text="emphasis",
+            format="italic"
+        )
+
+        # Test * syntax
+        content = "This needs *emphasis* here"
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        # Test _ syntax
+        content = "This needs _emphasis_ here"
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        # Should not match bold
+        content = "This needs **emphasis** here"
+        result, explanation = test.run(content)
+        self.assertFalse(result)
+        self.assertIn("not found with italic formatting", explanation)
+
+    def test_html_italic(self):
+        """Test detection of HTML italic text"""
+        test = FormatTest(
+            pdf="test.pdf",
+            page=1,
+            id="test_id",
+            type=TestType.FORMAT.value,
+            text="emphasis",
+            format="italic"
+        )
+
+        # Test <i> tag
+        content = "This needs <i>emphasis</i> here"
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        # Test <em> tag
+        content = "This needs <em>emphasis</em> here"
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+    def test_partial_match(self):
+        """Test that partial matches work"""
+        test = FormatTest(
+            pdf="test.pdf",
+            page=1,
+            id="test_id",
+            type=TestType.FORMAT.value,
+            text="Chapter",
+            format="heading"
+        )
+
+        content = "# Chapter One: Introduction\nSome text here"
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+    def test_case_insensitive(self):
+        """Test case insensitive matching"""
+        test = FormatTest(
+            pdf="test.pdf",
+            page=1,
+            id="test_id",
+            type=TestType.FORMAT.value,
+            text="IMPORTANT",
+            format="bold",
+            case_sensitive=False
+        )
+
+        content = "This is **important** text"
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+    def test_fuzzy_matching(self):
+        """Test fuzzy matching with max_diffs"""
+        test = FormatTest(
+            pdf="test.pdf",
+            page=1,
+            id="test_id",
+            type=TestType.FORMAT.value,
+            text="Chapter One",
+            format="heading",
+            max_diffs=2
+        )
+
+        # Slightly misspelled heading
+        content = "# Chaptre Oen\nSome text here"
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+    def test_multiple_formatted_sections(self):
+        """Test when multiple sections have the same format"""
+        test = FormatTest(
+            pdf="test.pdf",
+            page=1,
+            id="test_id",
+            type=TestType.FORMAT.value,
+            text="Section Two",
+            format="heading"
+        )
+
+        content = """
+# Section One
+Some text
+
+## Section Two
+More text
+
+### Section Three
+Even more text
+"""
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+    def test_nested_formatting(self):
+        """Test nested formatting scenarios"""
+        test = FormatTest(
+            pdf="test.pdf",
+            page=1,
+            id="test_id",
+            type=TestType.FORMAT.value,
+            text="bold text inside",
+            format="bold"
+        )
+
+        # Bold text inside a heading
+        content = "# This has **bold text inside** the heading"
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+    def test_mixed_markdown_html(self):
+        """Test content with both markdown and HTML formatting"""
+        test = FormatTest(
+            pdf="test.pdf",
+            page=1,
+            id="test_id",
+            type=TestType.FORMAT.value,
+            text="Important",
+            format="bold"
+        )
+
+        content = """
+Some **Important** markdown bold text.
+And some <b>Important</b> HTML bold text.
+"""
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+    def test_italic_not_matching_bold(self):
+        """Test that italic patterns don't incorrectly match bold"""
+        test = FormatTest(
+            pdf="test.pdf",
+            page=1,
+            id="test_id",
+            type=TestType.FORMAT.value,
+            text="text",
+            format="italic"
+        )
+
+        # Should not match double asterisk bold
+        content = "This is **text** here"
+        result, _ = test.run(content)
+        self.assertFalse(result)
+
+        # Should match single asterisk italic
+        content = "This is *text* here"
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+    def test_normalization_in_formatted_text(self):
+        """Test that text normalization works within formatted sections"""
+        test = FormatTest(
+            pdf="test.pdf",
+            page=1,
+            id="test_id",
+            type=TestType.FORMAT.value,
+            text='"fancy" \'quotes\'',  # This is what it looks like after normalization
+            format="bold"
+        )
+
+        # Content has fancy quotes that should be normalized
+        content = 'This is **\u201cfancy\u201d \u2018quotes\u2019** here'
+        result, _ = test.run(content)
+        self.assertTrue(result)
 
 
 if __name__ == "__main__":
