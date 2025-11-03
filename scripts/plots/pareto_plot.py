@@ -7,6 +7,8 @@ Invocation:
 
 import argparse
 import os
+from dataclasses import dataclass
+from typing import Literal
 
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
@@ -55,52 +57,126 @@ TEAL = "#105257"
 PURPLE = "#b11be8"
 GREEN = "#0fcb8c"
 
-# Create dataframe with OCR model data
-data = {
-    MODEL_COLUMN_NAME: [
-        "GPT-4o",
-        "GPT-4o (Batch)",
-        "Mistral OCR",
-        "MinerU 2.5.4",
-        "Gemini Flash 2",
-        "Gemini Flash 2 (Batch)",
-        "Marker v1.10.1",
-        "Ours",
-        "Qwen 2 VL",
-        "Qwen 2.5 VL",
-    ],
-    COST_COLUMN_NAME: [12480, 6240, 1000, 596, 499, 249, 1492, 178, 178, 178],  # Same cost as Ours  # Same cost as Ours
-    PERF_COLUMN_NAME: [
-        69.9,  # GPT-4o (Anchored)
-        69.9,  # Same performance for batch
-        72.0,  # Mistral OCR API
-        75.2,  # MinerU
-        63.8,  # Gemini Flash 2 (Anchored)
-        63.8,  # Same performance for batch
-        76.1,  # marker v1.10.1
-        82.3,  # Ours (performance is the same across hardware)
-        31.5,  # Qwen2VL
-        65.5,  # Qwen2.5VL
-    ],
-}
 
-df = pd.DataFrame(data)
+# Dataclass for model data
+@dataclass(frozen=True)
+class ModelData:
+    name: str
+    cost_per_million: float
+    performance: float
+    category: str
+    label_offset: tuple[float, float]
 
-# Add category information
-model_categories = {
-    "GPT-4o": "Commercial VLM",
-    "GPT-4o (Batch)": "Commercial VLM",
-    "Mistral OCR": "Commercial API Tool",
-    "MinerU 2.5.4": "Open Source Tool",
-    "Gemini Flash 2": "Commercial VLM",
-    "Gemini Flash 2 (Batch)": "Commercial VLM",
-    "Marker v1.10.1": "Open Source Tool",
-    "Ours": "Ours",
-    "Qwen 2 VL": "Open VLM",
-    "Qwen 2.5 VL": "Open VLM",
-}
 
-df[CATEGORY_COLUMN_NAME] = df[MODEL_COLUMN_NAME].map(model_categories)
+def cost_per_million_by_token(gpu: Literal["a100", "h100", "l40s"], tokens_sec: float, tokens_per_page: float = 750) -> float:
+    """
+    Calculate cost per million pages based on GPU type and token throughput.
+
+    Args:
+        gpu: GPU type ("a100", "h100", or "l40s")
+        tokens_sec: Number of tokens processed per second
+        tokens_per_page: Average number of tokens per page (default: 750)
+
+    Returns:
+        Cost per million pages in USD
+    """
+    # GPU hourly costs in USD from https://www.runpod.io/pricing Nov 3 2025
+    gpu_costs = {
+        "a100": 1.39,
+        "h100": 2.69,
+        "l40s": 0.79,
+    }
+
+    cost_per_hour = gpu_costs[gpu]
+
+    # Calculate pages per hour
+    # tokens per hour = tokens_sec * 3600
+    # pages per hour = tokens per hour / tokens_per_page
+    tokens_per_hour = tokens_sec * 3600
+    pages_per_hour = tokens_per_hour / tokens_per_page
+
+    # Calculate cost per million pages
+    cost_per_million = (cost_per_hour / pages_per_hour) * 1_000_000
+
+    return cost_per_million
+
+
+def cost_per_million_by_page(gpu: Literal["a100", "h100", "l40s"], pages_sec: float) -> float:
+    """
+    Calculate cost per million pages based on GPU type and page throughput.
+
+    Args:
+        gpu: GPU type ("a100", "h100", or "l40s")
+        pages_sec: Number of pages processed per second
+
+    Returns:
+        Cost per million pages in USD
+    """
+    # GPU hourly costs in USD from https://www.runpod.io/pricing Nov 3 2025
+    gpu_costs = {
+        "a100": 1.39,
+        "h100": 2.69,
+        "l40s": 0.79,
+    }
+
+    cost_per_hour = gpu_costs[gpu]
+
+    # Calculate pages per hour
+    pages_per_hour = pages_sec * 3600
+
+    # Calculate cost per million pages
+    cost_per_million = (cost_per_hour / pages_per_hour) * 1_000_000
+
+    return cost_per_million
+
+# All model data in one place for easy editing
+MODEL_DATA = [
+    # Perf data from historical API pricing 
+    ModelData(name="GPT-4o", cost_per_million=12480, performance=69.9, category="Commercial VLM", label_offset=(-35, 10)),
+    ModelData(name="GPT-4o (Batch)", cost_per_million=6240, performance=69.9, category="Commercial VLM", label_offset=(-50, 10)),
+    ModelData(name="Mistral OCR", cost_per_million=1000, performance=72.0, category="Commercial API Tool", label_offset=(-20, 10)),
+    ModelData(name="Gemini Flash 2", cost_per_million=499, performance=63.8, category="Commercial VLM", label_offset=(-10, 10)),
+    ModelData(name="Gemini Flash 2 (Batch)", cost_per_million=249, performance=63.8, category="Commercial VLM", label_offset=(-50, -20)),
+
+    # Perf data from paper https://arxiv.org/pdf/2509.22186
+    ModelData(name="MinerU 2.5.4", cost_per_million=cost_per_million_by_page("a100", 2.12), performance=75.2, category="Open Source Tool", label_offset=(10, -5)),
+
+    # Perf data is hard to measure, using previously calculated value, using more generous number from v.1.7.5
+    ModelData(name="Marker v1.10.1", cost_per_million=1492, performance=76.1, category="Open Source Tool", label_offset=(-25, 10)),
+
+    # Using cost per million pages from original olmocr paper
+    ModelData(name="Qwen 2 VL", cost_per_million=178, performance=31.5, category="Open VLM", label_offset=(-35, 10)),
+    ModelData(name="Qwen 2.5 VL", cost_per_million=178, performance=65.5, category="Open VLM", label_offset=(-35, 10)),
+
+    # Perf data from https://arxiv.org/pdf/2509.22186
+    ModelData(name="Nanonets-OCR2-3B", cost_per_million=cost_per_million_by_page("a100", 0.55), performance=69.5, category="Open VLM", label_offset=(-85, 10)),
+
+    # Pricing from this tweet: https://x.com/VikParuchuri/status/1980725223616876704
+    # You'd get better pricing running locally, but I couldn't get a number
+    ModelData(name="Chandra OCR API", cost_per_million=4000, performance=83.1, category="Commercial VLM", label_offset=(-85, 10)),
+
+    # Going off of 200k pages per day per A100
+    ModelData(name="DeepSeek-OCR", cost_per_million=cost_per_million_by_page("a100", pages_sec=200_000/(24*3600)), performance=75.7, category="Open VLM", label_offset=(-20, 10)),
+
+
+    # Perf data from paper pg 18 https://arxiv.org/pdf/2510.14528
+    ModelData(name="PaddleOCR-VL", cost_per_million=cost_per_million_by_page("a100", 1.2241), performance=80.0, category="Open VLM", label_offset=(-35, 10)),
+
+    # Perf data is here: https://beaker.allen.ai/orgs/ai2/workspaces/olmocr/work/01K8V42ERGBHAZ2KKDBKXKZHPJ?taskId=01K8V42ERJ9S82C06CSWQT7RR6&jobId=01K8VH0Y9J47ZXMCCWG97J7P54
+    ModelData(name="Ours", cost_per_million=cost_per_million_by_page("h100", 10000/(36*60+47)), performance=82.3, category="Ours", label_offset=(-20, 10)),
+]
+
+# Create dataframe from the aggregated data
+df = pd.DataFrame([
+    {
+        MODEL_COLUMN_NAME: m.name,
+        COST_COLUMN_NAME: m.cost_per_million,
+        PERF_COLUMN_NAME: m.performance,
+        CATEGORY_COLUMN_NAME: m.category,
+        OFFSET_COLUMN_NAME: list(m.label_offset),
+    }
+    for m in MODEL_DATA
+])
 
 # Category colors
 category_colors = {"Commercial API Tool": DARK_GREEN, "Commercial VLM": DARK_GREEN, "Open Source Tool": PURPLE, "Ours": DARK_PINK, "Open VLM": PURPLE}
@@ -123,22 +199,6 @@ category_text_colors = {
     "Ours": DARK_PINK,  # darker pink
     "Open VLM": PURPLE,  # darker purple
 }
-
-# Label offsets for better readability
-model_label_offsets = {
-    "GPT-4o": [-35, 10],
-    "GPT-4o (Batch)": [-50, 10],
-    "Mistral OCR": [-20, 10],
-    "MinerU 2.5.4": [-25, -20],
-    "Gemini Flash 2": [-10, 10],
-    "Gemini Flash 2 (Batch)": [-50, -20],
-    "Marker v1.10.1": [-25, 10],
-    "Ours": [-20, 10],
-    "Qwen 2 VL": [-35, 10],
-    "Qwen 2.5 VL": [-35, 10],
-}
-
-df[OFFSET_COLUMN_NAME] = df[MODEL_COLUMN_NAME].map(model_label_offsets)
 
 # Create the plot
 plt.figure(figsize=(10, 6))
