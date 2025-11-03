@@ -129,54 +129,58 @@ def cost_per_million_by_page(gpu: Literal["a100", "h100", "l40s"], pages_sec: fl
 
     return cost_per_million
 
+
 # All model data in one place for easy editing
 MODEL_DATA = [
-    # Perf data from historical API pricing 
+    # Perf data from historical API pricing
     ModelData(name="GPT-4o", cost_per_million=12480, performance=69.9, category="Commercial VLM", label_offset=(-35, 10)),
     ModelData(name="GPT-4o (Batch)", cost_per_million=6240, performance=69.9, category="Commercial VLM", label_offset=(-50, 10)),
     ModelData(name="Mistral OCR", cost_per_million=1000, performance=72.0, category="Commercial API Tool", label_offset=(-20, 10)),
     ModelData(name="Gemini Flash 2", cost_per_million=499, performance=63.8, category="Commercial VLM", label_offset=(-10, 10)),
     ModelData(name="Gemini Flash 2 (Batch)", cost_per_million=249, performance=63.8, category="Commercial VLM", label_offset=(-50, -20)),
-
     # Perf data from paper https://arxiv.org/pdf/2509.22186
-    ModelData(name="MinerU 2.5.4", cost_per_million=cost_per_million_by_page("a100", 2.12), performance=75.2, category="Open Source Tool", label_offset=(10, -5)),
-
+    ModelData(
+        name="MinerU 2.5.4", cost_per_million=cost_per_million_by_page("a100", 2.12), performance=75.2, category="Open Source Tool", label_offset=(10, -5)
+    ),
     # Perf data is hard to measure, using previously calculated value, using more generous number from v.1.7.5
     ModelData(name="Marker v1.10.1", cost_per_million=1492, performance=76.1, category="Open Source Tool", label_offset=(-25, 10)),
-
     # Using cost per million pages from original olmocr paper
     ModelData(name="Qwen 2 VL", cost_per_million=178, performance=31.5, category="Open VLM", label_offset=(-35, 10)),
     ModelData(name="Qwen 2.5 VL", cost_per_million=178, performance=65.5, category="Open VLM", label_offset=(-35, 10)),
-
     # Perf data from https://arxiv.org/pdf/2509.22186
     ModelData(name="Nanonets-OCR2-3B", cost_per_million=cost_per_million_by_page("a100", 0.55), performance=69.5, category="Open VLM", label_offset=(-85, 10)),
-
     # Pricing from this tweet: https://x.com/VikParuchuri/status/1980725223616876704
     # You'd get better pricing running locally, but I couldn't get a number
     ModelData(name="Chandra OCR API", cost_per_million=4000, performance=83.1, category="Commercial VLM", label_offset=(-85, 10)),
-
     # Going off of 200k pages per day per A100
-    ModelData(name="DeepSeek-OCR", cost_per_million=cost_per_million_by_page("a100", pages_sec=200_000/(24*3600)), performance=75.7, category="Open VLM", label_offset=(-20, 10)),
-
-
+    ModelData(
+        name="DeepSeek-OCR",
+        cost_per_million=cost_per_million_by_page("a100", pages_sec=200_000 / (24 * 3600)),
+        performance=75.7,
+        category="Open VLM",
+        label_offset=(-20, 10),
+    ),
     # Perf data from paper pg 18 https://arxiv.org/pdf/2510.14528
     ModelData(name="PaddleOCR-VL", cost_per_million=cost_per_million_by_page("a100", 1.2241), performance=80.0, category="Open VLM", label_offset=(-35, 10)),
-
     # Perf data is here: https://beaker.allen.ai/orgs/ai2/workspaces/olmocr/work/01K8V42ERGBHAZ2KKDBKXKZHPJ?taskId=01K8V42ERJ9S82C06CSWQT7RR6&jobId=01K8VH0Y9J47ZXMCCWG97J7P54
-    ModelData(name="Ours", cost_per_million=cost_per_million_by_page("h100", 10000/(36*60+47)), performance=82.3, category="Ours", label_offset=(-20, 10)),
+    ModelData(
+        name="Ours", cost_per_million=cost_per_million_by_page("h100", 10000 / (36 * 60 + 47)), performance=82.3, category="Ours", label_offset=(-20, 10)
+    ),
 ]
 
 # Create dataframe from the aggregated data
-df = pd.DataFrame([
-    {
-        MODEL_COLUMN_NAME: m.name,
-        COST_COLUMN_NAME: m.cost_per_million,
-        PERF_COLUMN_NAME: m.performance,
-        CATEGORY_COLUMN_NAME: m.category,
-        OFFSET_COLUMN_NAME: list(m.label_offset),
-    }
-    for m in MODEL_DATA
-])
+df = pd.DataFrame(
+    [
+        {
+            MODEL_COLUMN_NAME: m.name,
+            COST_COLUMN_NAME: m.cost_per_million,
+            PERF_COLUMN_NAME: m.performance,
+            CATEGORY_COLUMN_NAME: m.category,
+            OFFSET_COLUMN_NAME: list(m.label_offset),
+        }
+        for m in MODEL_DATA
+    ]
+)
 
 # Category colors
 category_colors = {"Commercial API Tool": DARK_GREEN, "Commercial VLM": DARK_GREEN, "Open Source Tool": PURPLE, "Ours": DARK_PINK, "Open VLM": PURPLE}

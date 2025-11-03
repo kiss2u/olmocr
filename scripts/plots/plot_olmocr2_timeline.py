@@ -4,7 +4,6 @@ import textwrap
 
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
-from matplotlib.dates import date2num
 
 # Define colors
 DARK_BLUE = "#093235"
@@ -45,40 +44,16 @@ model_categories = {
 }
 
 # Category colors
-category_colors = {
-    "Commercial API Tool": DARK_GREEN,
-    "Commercial VLM": DARK_GREEN,
-    "Open Source Tool": PURPLE,
-    "Ours": DARK_PINK,
-    "Open VLM": PURPLE
-}
+category_colors = {"Commercial API Tool": DARK_GREEN, "Commercial VLM": DARK_GREEN, "Open Source Tool": PURPLE, "Ours": DARK_PINK, "Open VLM": PURPLE}
 
 # Define marker types
-category_markers = {
-    "Commercial API Tool": "o",
-    "Commercial VLM": "^",
-    "Open Source Tool": "o",
-    "Ours": "*",
-    "Open VLM": "^"
-}
+category_markers = {"Commercial API Tool": "o", "Commercial VLM": "^", "Open Source Tool": "o", "Ours": "*", "Open VLM": "^"}
 
 # Define marker sizes
-category_marker_sizes = {
-    "Commercial API Tool": 100,
-    "Commercial VLM": 100,
-    "Open Source Tool": 120,
-    "Ours": 300,
-    "Open VLM": 120
-}
+category_marker_sizes = {"Commercial API Tool": 100, "Commercial VLM": 100, "Open Source Tool": 120, "Ours": 300, "Open VLM": 120}
 
 # Define text colors
-category_text_colors = {
-    "Commercial API Tool": DARK_GREEN,
-    "Commercial VLM": DARK_GREEN,
-    "Open Source Tool": PURPLE,
-    "Ours": DARK_PINK,
-    "Open VLM": PURPLE
-}
+category_text_colors = {"Commercial API Tool": DARK_GREEN, "Commercial VLM": DARK_GREEN, "Open Source Tool": PURPLE, "Ours": DARK_PINK, "Open VLM": PURPLE}
 
 # Data
 ocr_overall_scores = {
@@ -253,14 +228,17 @@ marker_data = [(k, v) for k, v in ocr_overall_scores.items() if k.startswith("Ma
 mineru_data = [(k, v) for k, v in ocr_overall_scores.items() if k.startswith("MinerU")]
 other_data = [(k, v) for k, v in ocr_overall_scores.items() if not k.startswith("olmOCR") and not k.startswith("Marker") and not k.startswith("MinerU")]
 
+
 def parse_mean(value):
     return float(value.split("±")[0].strip())
+
 
 def wrap_text(text, max_chars=20):
     """Wrap text to fit within max_chars per line."""
     if len(text) <= max_chars:
         return text
-    return '\n'.join(textwrap.wrap(text, width=max_chars))
+    return "\n".join(textwrap.wrap(text, width=max_chars))
+
 
 # Label position offsets (x_offset in days, y_offset in score units)
 # Adjust these to manually tune label positions relative to their data points
@@ -324,17 +302,14 @@ for idx, (name, date, score, display_name, descriptor) in enumerate(olm_data_sor
     # Only the last point gets a star, others get triangles
     marker = marker_star if idx == len(olm_data_sorted) - 1 else marker_triangle
     size = marker_size if idx == len(olm_data_sorted) - 1 else 100
-    plt.scatter(date, score, color=color, edgecolor="none", s=size,
-                marker=marker, zorder=3)
+    plt.scatter(date, score, color=color, edgecolor="none", s=size, marker=marker, zorder=3)
 
 # Add descriptor labels above olmOCR circles (black text)
 for name, date, score, display_name, descriptor in olm_data_sorted:
     x_off, y_off = label_offsets.get(name, (0, 1.5))
     label_date = date + dt.timedelta(days=x_off)
     wrapped_descriptor = wrap_text(descriptor, max_chars=20)
-    plt.text(label_date, score + y_off, f"{wrapped_descriptor}\n{score:.1f}",
-             ha='center', va='bottom', fontsize=7, fontweight='bold',
-             color='black')
+    plt.text(label_date, score + y_off, f"{wrapped_descriptor}\n{score:.1f}", ha="center", va="bottom", fontsize=7, fontweight="bold", color="black")
 
 # Add floating label for olmOCR line (above the line, no border)
 if olm_data_sorted:
@@ -343,9 +318,17 @@ if olm_data_sorted:
     mid_score = olm_data_sorted[mid_idx][2]
     x_offset_days, y_offset = floating_label_offsets.get("olmOCR", (0, -3))
     label_date = mid_date + dt.timedelta(days=x_offset_days)
-    plt.text(label_date, mid_score + y_offset, "olmOCR", fontsize=10, fontweight='bold',
-             color=color, ha='center', va='bottom',
-             bbox=dict(boxstyle='round,pad=0.3', facecolor='white', edgecolor='none', alpha=0.8))
+    plt.text(
+        label_date,
+        mid_score + y_offset,
+        "olmOCR",
+        fontsize=10,
+        fontweight="bold",
+        color=color,
+        ha="center",
+        va="bottom",
+        bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor="none", alpha=0.8),
+    )
 
 # Marker line
 if marker_data_sorted:
@@ -364,17 +347,14 @@ if marker_data_sorted:
         # Multiple points: draw line, use version labels, and add floating label
         plt.plot(dates, scores, color=color, linewidth=2)
         for name, date, score, display_name in marker_data_sorted:
-            plt.scatter(date, score, color=color, edgecolor="none", s=marker_size,
-                        marker=marker, zorder=3)
+            plt.scatter(date, score, color=color, edgecolor="none", s=marker_size, marker=marker, zorder=3)
 
         # Add version labels above Marker circles
         for name, date, score, display_name in marker_data_sorted:
             version = display_name.replace("Marker ", "")
             x_off, y_off = label_offsets.get(name, (0, 1.5))
             label_date = date + dt.timedelta(days=x_off)
-            plt.text(label_date, score + y_off, f"{version}\n{score:.1f}",
-                     ha='center', va='bottom', fontsize=7, fontweight='bold',
-                     color='black')
+            plt.text(label_date, score + y_off, f"{version}\n{score:.1f}", ha="center", va="bottom", fontsize=7, fontweight="bold", color="black")
 
         # Add floating label for Marker line
         mid_idx = len(marker_data_sorted) // 2
@@ -382,19 +362,24 @@ if marker_data_sorted:
         mid_score = marker_data_sorted[mid_idx][2]
         x_offset_days, y_offset = floating_label_offsets.get("Marker", (0, -3))
         label_date = mid_date + dt.timedelta(days=x_offset_days)
-        plt.text(label_date, mid_score + y_offset, "Marker", fontsize=10, fontweight='bold',
-                 color=color, ha='center', va='bottom',
-                 bbox=dict(boxstyle='round,pad=0.3', facecolor='white', edgecolor='none', alpha=0.8))
+        plt.text(
+            label_date,
+            mid_score + y_offset,
+            "Marker",
+            fontsize=10,
+            fontweight="bold",
+            color=color,
+            ha="center",
+            va="bottom",
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor="none", alpha=0.8),
+        )
     else:
         # Single point: suppress version, just show "Marker"
         for name, date, score, display_name in marker_data_sorted:
-            plt.scatter(date, score, color=color, edgecolor="none", s=marker_size,
-                        marker=marker, zorder=2)
+            plt.scatter(date, score, color=color, edgecolor="none", s=marker_size, marker=marker, zorder=2)
             x_off, y_off = label_offsets.get(name, (0, 1.5))
             label_date = date + dt.timedelta(days=x_off)
-            plt.text(label_date, score + y_off, f"Marker\n{score:.1f}",
-                     ha='center', va='bottom', fontsize=7, fontweight='bold',
-                     color='black')
+            plt.text(label_date, score + y_off, f"Marker\n{score:.1f}", ha="center", va="bottom", fontsize=7, fontweight="bold", color="black")
 
 # MinerU line
 if mineru_data_sorted:
@@ -413,17 +398,14 @@ if mineru_data_sorted:
         # Multiple points: draw line, use version labels, and add floating label
         plt.plot(dates, scores, color=color, linewidth=2)
         for name, date, score, display_name in mineru_data_sorted:
-            plt.scatter(date, score, color=color, edgecolor="none", s=marker_size,
-                        marker=marker, zorder=3)
+            plt.scatter(date, score, color=color, edgecolor="none", s=marker_size, marker=marker, zorder=3)
 
         # Add version labels above MinerU circles
         for name, date, score, display_name in mineru_data_sorted:
             version = display_name.replace("MinerU ", "")
             x_off, y_off = label_offsets.get(name, (0, 1.5))
             label_date = date + dt.timedelta(days=x_off)
-            plt.text(label_date, score + y_off, f"{version}\n{score:.1f}",
-                     ha='center', va='bottom', fontsize=7, fontweight='bold',
-                     color='black')
+            plt.text(label_date, score + y_off, f"{version}\n{score:.1f}", ha="center", va="bottom", fontsize=7, fontweight="bold", color="black")
 
         # Add floating label for MinerU line
         mid_idx = len(mineru_data_sorted) // 2
@@ -431,19 +413,24 @@ if mineru_data_sorted:
         mid_score = mineru_data_sorted[mid_idx][2]
         x_offset_days, y_offset = floating_label_offsets.get("MinerU", (0, -3))
         label_date = mid_date + dt.timedelta(days=x_offset_days)
-        plt.text(label_date, mid_score + y_offset, "MinerU", fontsize=10, fontweight='bold',
-                 color=color, ha='center', va='bottom',
-                 bbox=dict(boxstyle='round,pad=0.3', facecolor='white', edgecolor='none', alpha=0.8))
+        plt.text(
+            label_date,
+            mid_score + y_offset,
+            "MinerU",
+            fontsize=10,
+            fontweight="bold",
+            color=color,
+            ha="center",
+            va="bottom",
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor="none", alpha=0.8),
+        )
     else:
         # Single point: suppress version, just show "MinerU"
         for name, date, score, display_name in mineru_data_sorted:
-            plt.scatter(date, score, color=color, edgecolor="none", s=marker_size,
-                        marker=marker, zorder=2)
+            plt.scatter(date, score, color=color, edgecolor="none", s=marker_size, marker=marker, zorder=2)
             x_off, y_off = label_offsets.get(name, (0, 1.5))
             label_date = date + dt.timedelta(days=x_off)
-            plt.text(label_date, score + y_off, f"MinerU\n{score:.1f}",
-                     ha='center', va='bottom', fontsize=7, fontweight='bold',
-                     color='black')
+            plt.text(label_date, score + y_off, f"MinerU\n{score:.1f}", ha="center", va="bottom", fontsize=7, fontweight="bold", color="black")
 
 # Other models
 for name, v in other_data:
@@ -458,16 +445,13 @@ for name, v in other_data:
         marker_size = category_marker_sizes[category]
         text_color = category_text_colors[category]
 
-        plt.scatter(d, s, color=color, edgecolor="none", s=marker_size,
-                    marker=marker, zorder=2)
+        plt.scatter(d, s, color=color, edgecolor="none", s=marker_size, marker=marker, zorder=2)
 
         # Add label above circle
         x_off, y_off = label_offsets.get(name, (0, 1.5))
         label_date = d + dt.timedelta(days=x_off)
         wrapped_name = wrap_text(name, max_chars=20)
-        plt.text(label_date, s + y_off, f"{wrapped_name}\n{s:.1f}",
-                 ha='center', va='bottom', fontsize=7, fontweight='bold',
-                 color='black')
+        plt.text(label_date, s + y_off, f"{wrapped_name}\n{s:.1f}", ha="center", va="bottom", fontsize=7, fontweight="bold", color="black")
 
 # Labels and style
 plt.xlabel("Date")
@@ -475,20 +459,20 @@ plt.ylabel("Overall Performance")
 
 # Format x-axis with dates
 ax = plt.gca()
-ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %Y'))
+ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %Y"))
 ax.xaxis.set_major_locator(mdates.MonthLocator(interval=3))
 plt.gcf().autofmt_xdate()  # Rotate date labels for better readability
 
 # Increase y-axis limits to prevent label bleeding
 current_ylim = ax.get_ylim()
 ax.set_ylim(current_ylim[0] - 5, current_ylim[1] + 10)
-plt.grid(alpha=0.3, linestyle='--')
+plt.grid(alpha=0.3, linestyle="--")
 
 plt.tight_layout()
 
 # Save the plot first before showing
 save_path = os.path.join(os.path.dirname(__file__), "olmocr2_timeline.png")
-plt.savefig(save_path, dpi=300, bbox_inches='tight')
+plt.savefig(save_path, dpi=300, bbox_inches="tight")
 print(f"Saved plot to {save_path}")
 
 plt.show()
