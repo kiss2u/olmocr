@@ -51,13 +51,15 @@ except ImportError:
 from olmocr.s3_utils import parse_s3_path
 
 # Hugging Face model IDs for tokenizer files
-HF_MODEL_IDS = {"Qwen2VLForConditionalGeneration": "Qwen/Qwen2-VL-7B-Instruct", "Qwen2_5_VLForConditionalGeneration": "Qwen/Qwen2.5-VL-7B-Instruct"}
+HF_MODEL_IDS = {"Qwen2VLForConditionalGeneration": "Qwen/Qwen2-VL-7B-Instruct",
+                "Qwen2_5_VLForConditionalGeneration": "Qwen/Qwen2.5-VL-7B-Instruct",
+                "Qwen2VLForConditionalGeneration": "Qwen/Qwen3-VL-8B-Instruct"}
 
 # Required tokenizer files to download from Hugging Face
 TOKENIZER_FILES = ["chat_template.json", "merges.txt", "preprocessor_config.json", "tokenizer.json", "tokenizer_config.json", "vocab.json"]
 
 # Supported model architectures
-SUPPORTED_ARCHITECTURES = ["Qwen2VLForConditionalGeneration", "Qwen2_5_VLForConditionalGeneration"]
+SUPPORTED_ARCHITECTURES = ["Qwen2VLForConditionalGeneration", "Qwen2_5_VLForConditionalGeneration", "Qwen3VLForConditionalGeneration"]
 
 # Files to exclude from copying (training-related files)
 # Supports exact matches and glob patterns
@@ -118,6 +120,8 @@ def detect_checkpoint_architecture(config_path: str) -> str:
             detected_architecture = "Qwen2_5_VLForConditionalGeneration"
         elif "Qwen2-VL" in model_name:
             detected_architecture = "Qwen2VLForConditionalGeneration"
+        elif "Qwen3-VL" in model_name:
+            detected_architecture = "Qwen3VLForConditionalGeneration"
         else:
             raise ValueError(f"No supported architecture found. Expected one of {SUPPORTED_ARCHITECTURES} " f"but found: {architectures}")
 
