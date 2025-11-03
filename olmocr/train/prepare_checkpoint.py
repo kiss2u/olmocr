@@ -53,7 +53,7 @@ from olmocr.s3_utils import parse_s3_path
 # Hugging Face model IDs for tokenizer files
 HF_MODEL_IDS = {"Qwen2VLForConditionalGeneration": "Qwen/Qwen2-VL-7B-Instruct",
                 "Qwen2_5_VLForConditionalGeneration": "Qwen/Qwen2.5-VL-7B-Instruct",
-                "Qwen2VLForConditionalGeneration": "Qwen/Qwen3-VL-8B-Instruct"}
+                "Qwen3VLForConditionalGeneration": "Qwen/Qwen3-VL-8B-Instruct"}
 
 # Required tokenizer files to download from Hugging Face
 TOKENIZER_FILES = ["chat_template.json", "merges.txt", "preprocessor_config.json", "tokenizer.json", "tokenizer_config.json", "vocab.json"]
