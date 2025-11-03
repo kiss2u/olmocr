@@ -61,10 +61,10 @@ data = {
         "GPT-4o",
         "GPT-4o (Batch)",
         "Mistral OCR",
-        "MinerU",
+        "MinerU 2.5.4",
         "Gemini Flash 2",
         "Gemini Flash 2 (Batch)",
-        "Marker v1.7.5",
+        "Marker v1.10.1",
         "Ours",
         "Qwen 2 VL",
         "Qwen 2.5 VL",
@@ -74,11 +74,11 @@ data = {
         69.9,  # GPT-4o (Anchored)
         69.9,  # Same performance for batch
         72.0,  # Mistral OCR API
-        61.5,  # MinerU
+        75.2,  # MinerU
         63.8,  # Gemini Flash 2 (Anchored)
         63.8,  # Same performance for batch
-        70.1,  # marker v1.7.5 base
-        75.5,  # Ours (performance is the same across hardware)
+        76.1,  # marker v1.10.1
+        82.3,  # Ours (performance is the same across hardware)
         31.5,  # Qwen2VL
         65.5,  # Qwen2.5VL
     ],
@@ -91,10 +91,10 @@ model_categories = {
     "GPT-4o": "Commercial VLM",
     "GPT-4o (Batch)": "Commercial VLM",
     "Mistral OCR": "Commercial API Tool",
-    "MinerU": "Open Source Tool",
+    "MinerU 2.5.4": "Open Source Tool",
     "Gemini Flash 2": "Commercial VLM",
     "Gemini Flash 2 (Batch)": "Commercial VLM",
-    "Marker v1.7.5": "Open Source Tool",
+    "Marker v1.10.1": "Open Source Tool",
     "Ours": "Ours",
     "Qwen 2 VL": "Open VLM",
     "Qwen 2.5 VL": "Open VLM",
@@ -129,10 +129,10 @@ model_label_offsets = {
     "GPT-4o": [-35, 10],
     "GPT-4o (Batch)": [-50, 10],
     "Mistral OCR": [-20, 10],
-    "MinerU": [-15, -20],
+    "MinerU 2.5.4": [-25, -20],
     "Gemini Flash 2": [-10, 10],
     "Gemini Flash 2 (Batch)": [-50, -20],
-    "Marker v1.7.5": [-25, -20],
+    "Marker v1.10.1": [-25, 10],
     "Ours": [-20, 10],
     "Qwen 2 VL": [-35, 10],
     "Qwen 2.5 VL": [-35, 10],
