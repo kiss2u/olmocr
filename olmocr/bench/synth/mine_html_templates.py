@@ -24,7 +24,7 @@ from tqdm import tqdm
 from wordfreq import zipf_frequency
 
 
-from olmocr.bench.tests import TableTest, TestType, normalize_text, parse_html_tables, TextPresenceTest, BaselineTest
+from olmocr.bench.tests import TableTest, TestType, normalize_text, parse_html_tables, TextPresenceTest, BaselineTest, FormatTest
 from olmocr.data.renderpdf import (
     get_png_dimensions_from_base64,
     render_pdf_to_base64png,
@@ -1308,6 +1308,77 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
             }
         )
 
+    # Step 5: Generate FormatTests for headings, bold, and italic text
+    format_tests = []
+
+    # Define mapping from HTML tags to format types
+    format_tag_mapping = {
+        ("h1", "h2", "h3", "h4", "h5", "h6"): "heading",
+        ("b", "strong"): "bold",
+        ("i", "em"): "italic"
+    }
+
+    # Parse the HTML to find formatted elements
+    format_soup = BeautifulSoup(html_content, "html.parser")
+
+    # Convert superscripts and subscripts before extracting text
+    convert_superscripts_subscripts(format_soup)
+
+    # Remove headers, footers, and tables from format soup to focus on main content
+    for element in format_soup.find_all(["header", "footer", "table"]):
+        element.decompose()
+
+    # Track what we've already tested to avoid duplicates
+    tested_texts = set()
+
+    # Process each format type
+    for tags, format_type in format_tag_mapping.items():
+        # Find all elements with these tags
+        elements = format_soup.find_all(list(tags))
+
+        for element in elements:
+            if len(format_tests) >= 5:  # Limit to 5 total format tests
+                break
+
+            element_text = element.get_text().strip()
+            element_text = normalize_text(element_text)
+
+            if element_text and len(element_text) >= 3 and element_text not in tested_texts:
+                # Create a format test
+                test_data = {
+                    "pdf": pdf_filename,
+                    "page": 1,
+                    "id": f"{pdf_id}_format_{format_type}_{uuid.uuid4().hex[:8]}",
+                    "type": TestType.FORMAT.value,
+                    "text": element_text,
+                    "format": format_type,
+                    "max_diffs": 0,
+                }
+
+                # Validate the test against markdown_content
+                try:
+                    test_obj = FormatTest(
+                        pdf=test_data["pdf"],
+                        page=test_data["page"],
+                        id=test_data["id"],
+                        type=test_data["type"],
+                        text=test_data["text"],
+                        format=test_data["format"],
+                        max_diffs=test_data["max_diffs"]
+                    )
+
+                    # Test against the markdown_content (not markdown_text)
+                    passed, _ = test_obj.run(markdown_content)
+
+                    if passed:
+                        format_tests.append(test_data)
+                        tested_texts.add(element_text)
+                except Exception:
+                    pass
+
+    # Add format tests to the main tests list
+    tests.extend(format_tests)
+
     # Final test filtering out stage
 
     # Now double check that the absent tests don't find any matches in the markdown_text
@@ -1342,6 +1413,16 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
         # Math tests should not be filtered for LaTeX content
         if test.get("type") == "math":
             filtered_tests.append(test)
+            continue
+
+        # Format tests have different validation requirements
+        if test.get("type") == TestType.FORMAT.value:
+            # Only check the "text" field for format tests
+            if "text" in test:
+                if (contains_alphanumeric(test["text"]) and
+                    not contains_latex(test["text"]) and
+                    not contains_unicode_super_or_subscripts(test["text"])):
+                    filtered_tests.append(test)
             continue
 
         # Check all text fields in the test for alphanumeric content, LaTeX, and Unicode super/subscripts

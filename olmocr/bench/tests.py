@@ -21,6 +21,8 @@ __test__ = False
 
 
 class TestType(str, Enum):
+    __test__ = False  # Tell pytest this is not a test class
+    
     BASELINE = "baseline"
     PRESENT = "present"
     ABSENT = "absent"
