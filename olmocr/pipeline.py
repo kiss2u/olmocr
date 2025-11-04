@@ -85,7 +85,8 @@ pdf_s3 = boto3.client("s3")
 metrics = MetricsKeeper(window=60 * 5)
 tracker = WorkerTracker()
 
-pdf_render_max_workers = asyncio.BoundedSemaphore(int(float(os.environ.get("BEAKER_ASSIGNED_CPU_COUNT", max(1, multiprocessing.cpu_count() - 2)))))
+pdf_render_max_workers_limit = asyncio.BoundedSemaphore(int(float(os.environ.get("BEAKER_ASSIGNED_CPU_COUNT", max(1, multiprocessing.cpu_count() - 2)))))
+max_concurrent_requests_limit = asyncio.BoundedSemaphore(1)  # Actual value set by args in main()
 
 # Filter object, cached so it will only get loaded when/if you need it
 get_pdf_filter = cache(lambda: PdfFilter(languages_to_keep={Language.ENGLISH, None}, apply_download_spam_check=True, apply_form_check=True))
@@ -107,7 +108,7 @@ async def build_page_query(local_pdf_path: str, page: int, target_longest_image_
     assert image_rotation in [0, 90, 180, 270], "Invalid image rotation provided in build_page_query"
 
     # Allow the page rendering to process in the background, but limit the number of workers otherwise you can overload the system
-    async with pdf_render_max_workers:
+    async with pdf_render_max_workers_limit:
         image_base64 = await asyncio.to_thread(render_pdf_to_base64png, local_pdf_path, page, target_longest_image_dim=target_longest_image_dim)
 
     if image_rotation != 0:
@@ -287,7 +288,9 @@ async def process_page(args, worker_id: int, pdf_orig_path: str, pdf_local_path:
                 api_key = args.api_key
             else:
                 api_key = None
-            status_code, response_body = await apost(COMPLETION_URL, json_data=query, api_key=api_key)
+
+            async with max_concurrent_requests_limit:
+                status_code, response_body = await apost(COMPLETION_URL, json_data=query, api_key=api_key)
 
             if status_code == 400:
                 raise ValueError(f"Got BadRequestError from server: {response_body}, skipping this response")
@@ -1104,6 +1107,7 @@ async def main():
     parser.add_argument("--max_page_retries", type=int, default=8, help="Max number of times we will retry rendering a page")
     parser.add_argument("--max_page_error_rate", type=float, default=0.004, help="Rate of allowable failed pages in a document, 1/250 by default")
     parser.add_argument("--workers", type=int, default=20, help="Number of workers to run at a time")
+    parser.add_argument("--max_concurrent_requests", type=int, default=1600, help="Max number of concurrent VLLM server requests at a time.")
     parser.add_argument("--apply_filter", action="store_true", help="Apply basic filtering to English pdfs which are not forms, and not likely seo spam")
     parser.add_argument("--stats", action="store_true", help="Instead of running any job, reports some statistics about the current workspace")
     parser.add_argument("--markdown", action="store_true", help="Also write natural text to markdown files preserving the folder structure of the input pdfs")
@@ -1149,7 +1153,9 @@ async def main():
     )
 
     use_internal_server = not args.server
-    global workspace_s3, pdf_s3
+    global workspace_s3, pdf_s3, max_concurrent_requests_limit
+
+    max_concurrent_requests_limit = asyncio.BoundedSemaphore(args.max_concurrent_requests)
 
     # setup the job to work in beaker environment, load secrets, adjust logging, etc.
     if "BEAKER_JOB_NAME" in os.environ:
