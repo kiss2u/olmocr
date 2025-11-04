@@ -1395,18 +1395,33 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
     # Generate FootnoteTests
     max_footnote_tests = 5
 
-    for sup in sup_elements[:10]:  # Check up to 10 superscript elements
-        if len(footnote_tests) >= max_footnote_tests:
-            break
+    # Track superscript elements per marker so we can merge information
+    marker_sup_map = {}
+    marker_order = []
 
+    for sup in sup_elements:
         marker_text = sup.get_text().strip()
 
         # Check if it's likely a footnote marker (numbers, letters, or common symbols)
-        if not marker_text or not (marker_text.isdigit() or
-                                  (len(marker_text) == 1 and marker_text.isalpha()) or
-                                  marker_text in ['*', '†', '‡', '§', '¶']):
+        if not marker_text or not (
+            marker_text.isdigit()
+            or (len(marker_text) == 1 and marker_text.isalpha())
+            or marker_text in ['*', '†', '‡', '§', '¶']
+        ):
             continue
 
+        if marker_text not in marker_sup_map:
+            if len(marker_order) >= max_footnote_tests:
+                continue
+            marker_order.append(marker_text)
+            marker_sup_map[marker_text] = []
+
+        # Collect all superscript occurrences for the marker so we can merge fields later
+        marker_sup_map[marker_text].append(sup)
+
+    page_text = str(footnote_soup)
+
+    for marker_text in marker_order:
         test_data = {
             "pdf": pdf_filename,
             "page": 1,
@@ -1417,35 +1432,28 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
         }
 
         # Try to find text that appears before this marker (marker_after field)
-        # Get the parent element and its text
-        parent = sup.parent
-        if parent:
+        marker_after_candidate = None
+        for sup in marker_sup_map[marker_text]:
+            parent = sup.parent
+            if not parent:
+                continue
+
             parent_text = parent.get_text()
-            # Find where the superscript appears in the parent text
             marker_pos = parent_text.find(marker_text)
-            if marker_pos > 10:  # Ensure there's enough text before
+            if marker_pos > 10:
                 preceding_text = parent_text[:marker_pos].strip()
                 if len(preceding_text) >= 10:
-                    test_data["marker_after"] = normalize_text(preceding_text)[-50:]  # Last 50 chars
+                    last_word = preceding_text.split()[-1] if preceding_text.split() else preceding_text
+                    candidate = normalize_text(last_word)
+                    if candidate:
+                        marker_after_candidate = candidate
+                        break
 
-        # Try to find footnote text (often appears at bottom of page with same marker)
-        # Look through all text nodes for pattern: marker followed by footnote text
-        page_text = str(footnote_soup)
-
-        # Pattern: find another instance of the same superscript followed by text
-        # This often appears in the footnote section
-        footnote_pattern = rf'<sup[^>]*>{re.escape(marker_text)}</sup>\s*([^<\n]{{20,200}})'
-        matches = re.findall(footnote_pattern, page_text, re.IGNORECASE)
-
-        # If we found multiple matches, the later ones are more likely to be the actual footnote text
-        for match in matches[1:]:  # Skip first match as it's likely the reference, not the definition
-            potential_footnote_text = match.strip()
-            if len(potential_footnote_text) >= 20:
-                test_data["text"] = normalize_text(potential_footnote_text)[:100]
-                break
+        if marker_after_candidate:
+            test_data["marker_after"] = marker_after_candidate
 
         # Only create test if we have marker and at least one other field
-        if len(test_data) > 5:  # More than just pdf, page, id, type, max_diffs
+        if len(test_data) > 5:
             try:
                 test_obj = FootnoteTest(**test_data)
                 passed, _ = test_obj.run(markdown_content)
