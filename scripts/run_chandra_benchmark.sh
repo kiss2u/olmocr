@@ -108,13 +108,13 @@ VLLM_PID=$!
 
 # Wait for vllm server to be ready
 echo "Waiting for vllm server to start..."
-for i in {1..60}; do
+for i in {1..600}; do
     if curl -s http://localhost:8000/health > /dev/null 2>&1; then
         echo "vllm server is ready"
         break
     fi
-    if [ $i -eq 60 ]; then
-        echo "Error: vllm server failed to start after 60 seconds"
+    if [ $i -eq 600 ]; then
+        echo "Error: vllm server failed to start after 600 seconds"
         cat /tmp/vllm_server.log
         exit 1
     fi
@@ -252,13 +252,13 @@ VLLM_PID=$!
 
 # Wait for vllm server to be ready
 echo "Waiting for vllm server to start..."
-for i in {1..60}; do
+for i in {1..600}; do
     if curl -s http://localhost:8000/health > /dev/null 2>&1; then
         echo "vllm server is ready"
         break
     fi
-    if [ $i -eq 60 ]; then
-        echo "Error: vllm server failed to start after 60 seconds"
+    if [ $i -eq 600 ]; then
+        echo "Error: vllm server failed to start after 600 seconds"
         cat /tmp/vllm_server.log
         exit 1
     fi
