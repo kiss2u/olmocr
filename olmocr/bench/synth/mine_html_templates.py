@@ -1389,20 +1389,16 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
     for element in footnote_soup.find_all(["header", "footer"]):
         element.decompose()
 
-    # Strategy 2 only: Look for superscript elements that might be footnote markers
+    # Look for superscript elements that might be footnote markers
     sup_elements = footnote_soup.find_all("sup")
 
-    # Generate FootnoteTests
     max_footnote_tests = 5
-
-    # Track superscript elements per marker so we can merge information
     marker_sup_map = {}
-    marker_order = []
 
     for sup in sup_elements:
         marker_text = sup.get_text().strip()
 
-        # Check if it's likely a footnote marker (numbers, letters, or common symbols)
+        # Filter out markers that are unlikely to be footnote references
         if not marker_text or not (
             marker_text.isdigit()
             or (len(marker_text) == 1 and marker_text.isalpha())
@@ -1411,17 +1407,16 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
             continue
 
         if marker_text not in marker_sup_map:
-            if len(marker_order) >= max_footnote_tests:
+            if len(marker_sup_map) >= max_footnote_tests:
                 continue
-            marker_order.append(marker_text)
             marker_sup_map[marker_text] = []
 
-        # Collect all superscript occurrences for the marker so we can merge fields later
         marker_sup_map[marker_text].append(sup)
 
     page_text = str(footnote_soup)
+    footnote_pattern_template = r'<sup[^>]*>{marker}</sup>\s*([^<\n]{{20,200}})'
 
-    for marker_text in marker_order:
+    for marker_text, marker_superscripts in marker_sup_map.items():
         test_data = {
             "pdf": pdf_filename,
             "page": 1,
@@ -1433,7 +1428,7 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
 
         # Try to find text that appears before this marker (marker_after field)
         marker_after_candidate = None
-        for sup in marker_sup_map[marker_text]:
+        for sup in marker_superscripts:
             parent = sup.parent
             if not parent:
                 continue
@@ -1451,6 +1446,28 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
 
         if marker_after_candidate:
             test_data["marker_after"] = marker_after_candidate
+
+        # Add footnote text only when the marker appears at least twice (reference + definition)
+        if len(marker_superscripts) >= 2:
+            footnote_pattern = footnote_pattern_template.format(marker=re.escape(marker_text))
+            matches = re.findall(footnote_pattern, page_text, re.IGNORECASE)
+
+            best_text = None
+            if len(matches) > 1:
+                candidate_matches = matches[1:]
+            else:
+                candidate_matches = matches
+
+            for match in candidate_matches:
+                potential_text = match.strip()
+                if len(potential_text) >= 20:
+                    normalized = normalize_text(potential_text)
+                    if normalized:
+                        if not best_text or len(potential_text) > len(best_text):
+                            best_text = normalized[:100]
+
+            if best_text:
+                test_data["text"] = best_text
 
         # Only create test if we have marker and at least one other field
         if len(test_data) > 5:

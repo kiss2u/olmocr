@@ -720,6 +720,18 @@ class FootnoteTest(BasePDFTest):
                 html_matches = re.findall(html_footnote_pattern, md_content, re.IGNORECASE)
                 footnote_matches.extend(html_matches)
 
+                # Additionally check for unicode superscript markers followed by text (e.g., ¹Text)
+                unicode_superscript_map = {
+                    '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴',
+                    '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹'
+                }
+
+                if all(c in unicode_superscript_map for c in self.marker):
+                    unicode_marker = ''.join(unicode_superscript_map[c] for c in self.marker)
+                    unicode_pattern = rf'{re.escape(unicode_marker)}\s*([^\n]+(?:\n(?!\n)[^\n]+)*)'
+                    unicode_matches = re.findall(unicode_pattern, md_content)
+                    footnote_matches.extend(unicode_matches)
+
             # Check each footnote text for a match
             threshold = 1.0 - (self.max_diffs / (len(self.text) if len(self.text) > 0 else 1))
             for footnote_text in footnote_matches:
