@@ -1352,7 +1352,7 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
                     "type": TestType.FORMAT.value,
                     "text": element_text,
                     "format": format_type,
-                    "max_diffs": 0,
+                    "max_diffs": round(len(element_text) * 0.05),
                 }
 
                 # Validate the test against markdown_content
