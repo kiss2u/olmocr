@@ -711,6 +711,15 @@ class FootnoteTest(BasePDFTest):
             footnote_pattern = r'\[\^[^\]]+\]:\s*(.+?)(?=\n\[\^|\n\n|\Z)'
             footnote_matches = re.findall(footnote_pattern, md_content, re.DOTALL | re.MULTILINE)
 
+            # Also look for HTML-style footnote definitions: <sup>marker</sup> followed by text
+            # This is common in HTML documents where footnote text appears right after the superscript
+            if self.marker:
+                # Pattern to match <sup>marker</sup> followed by footnote text
+                # We capture text until we hit another <sup> tag or double newline
+                html_footnote_pattern = rf'<sup[^>]*>{re.escape(self.marker)}</sup>\s*([^<\n]+(?:\n(?!\n)[^<\n]+)*)'
+                html_matches = re.findall(html_footnote_pattern, md_content, re.IGNORECASE)
+                footnote_matches.extend(html_matches)
+
             # Check each footnote text for a match
             threshold = 1.0 - (self.max_diffs / (len(self.text) if len(self.text) > 0 else 1))
             for footnote_text in footnote_matches:

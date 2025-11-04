@@ -2545,6 +2545,149 @@ Other text<sup>†</sup> with HTML format.
         result, _ = test.run(content)
         self.assertFalse(result)
 
+    def test_html_footnote_definitions(self):
+        """Test HTML-style footnote definitions where text follows <sup>marker</sup>"""
+        test = FootnoteTest(
+            pdf="test.pdf",
+            page=1,
+            id="test_id",
+            type=TestType.FOOTNOTE.value,
+            marker="1",
+            text="This is the footnote text"
+        )
+
+        # HTML style: <sup>1</sup>This is the footnote text
+        content = """
+Some text with a reference<sup>1</sup> in the middle.
+
+At the bottom:
+<sup>1</sup>This is the footnote text that appears right after the marker.
+"""
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+    def test_html_footnote_with_special_symbols(self):
+        """Test HTML-style footnotes with special symbol markers"""
+        test = FootnoteTest(
+            pdf="test.pdf",
+            page=1,
+            id="test_id",
+            type=TestType.FOOTNOTE.value,
+            marker="†",
+            text="See appendix for details"
+        )
+
+        # HTML style with special symbol
+        content = """
+Important finding<sup>†</sup> in the research.
+
+<sup>†</sup>See appendix for details and supplementary materials.
+"""
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+    def test_mixed_footnote_styles(self):
+        """Test document with both markdown and HTML footnote definitions"""
+        # Test for first footnote (markdown style)
+        test1 = FootnoteTest(
+            pdf="test.pdf",
+            page=1,
+            id="test_id",
+            type=TestType.FOOTNOTE.value,
+            marker="1",
+            text="First reference"
+        )
+
+        content = """
+First point[^1] and second point<sup>2</sup>.
+
+[^1]: First reference in markdown style.
+
+<sup>2</sup>Second reference in HTML style.
+"""
+        result, _ = test1.run(content)
+        self.assertTrue(result)
+
+        # Test for second footnote (HTML style)
+        test2 = FootnoteTest(
+            pdf="test.pdf",
+            page=1,
+            id="test_id",
+            type=TestType.FOOTNOTE.value,
+            marker="2",
+            text="Second reference"
+        )
+        result, _ = test2.run(content)
+        self.assertTrue(result)
+
+    def test_html_footnote_multiline(self):
+        """Test HTML footnote that spans multiple lines"""
+        test = FootnoteTest(
+            pdf="test.pdf",
+            page=1,
+            id="test_id",
+            type=TestType.FOOTNOTE.value,
+            marker="3",
+            text="This footnote text spans multiple lines with more information"
+        )
+
+        content = """
+Reference here<sup>3</sup>.
+
+<sup>3</sup>This footnote text
+spans multiple lines
+with more information.
+"""
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+    def test_real_world_case(self):
+        content = """## Abstract
+
+Automated scientific discovery promises to accelerate progress across scientific domains. However, developing and evaluating an AI agent's capacity for end-to-end scientific reasoning is challenging as running real-world experiments is often prohibitively expensive or infeasible. In this work we introduce DISCOVERYWORLD, the first virtual environment for developing and benchmarking an agent's ability to perform complete cycles of novel scientific discovery. DISCOVERYWORLD contains a variety of different challenges, covering topics as diverse as radioisotope dating, rocket science, and proteomics, to encourage development of *general* discovery skills rather than task-specific solutions. DISCOVERYWORLD itself is an inexpensive, simulated, text-based environment (with optional 2D visual overlay). It includes 120 different challenge tasks, spanning eight topics each with three levels of difficulty and several parametric variations. Each task requires an agent to form hypotheses, design and run experiments, analyze results, and act on conclusions. DISCOVERYWORLD further provides three automatic metrics for evaluating performance, based on (a) task completion, (b) task-relevant actions taken, and (c) the discovered explanatory knowledge. We find that strong baseline agents, that perform well in prior published environments, struggle on most DISCOVERYWORLD tasks, suggesting that DISCOVERYWORLD captures some of the novel challenges of discovery, and thus that DISCOVERYWORLD may help accelerate near-term development and assessment of scientific discovery competency in agents. Code available at github.com/allenai/discoveryworld.<sup>1</sup>
+
+## 1 Introduction
+
+A long-standing dream of AI has been to build systems that can perform scientific discovery, potentially leading to new breakthroughs for the benefit of humanity [13]. Recently, with the rise of neural techniques, there have been several successful discovery systems developed for specialized problems such as protein folding [10, 15], mathematics [22], and material science [24]. However, while the results have been impressive, these systems (deliberately) bypass the full discovery process of ideation, hypothesis formation, experiment design, etc., and instead (expertly) perform systematic searches over a pre-defined hypothesis space, with pre-defined goals. This raises the question: how much more can be achieved if AI is applied to the broader scientific process? Some works have indeed developed early systems for this, for example, in chemistry [1], and genetics [12]. These systems can also generate hypotheses, design experiments, and execute them (via robotics) in real environments. However, operating in real environments is expensive and complex, creating a barrier
+
+<sup>1</sup>Released under Apache-2.0 license."""
+
+        test = FootnoteTest(
+            pdf="test.pdf",
+            page=1,
+            id="test_id",
+            type=TestType.FOOTNOTE.value,
+            marker="1"
+        )
+
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        test = FootnoteTest(
+            pdf="test.pdf",
+            page=1,
+            id="test_id",
+            type=TestType.FOOTNOTE.value,
+            marker="1",
+            marker_after="Code available at github.com/allenai/discoveryworld."
+        )
+
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        test = FootnoteTest(
+            pdf="test.pdf",
+            page=1,
+            id="test_id",
+            type=TestType.FOOTNOTE.value,
+            marker="1",
+            text="Released under Apache-2.0 license"
+        )
+
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+
 
 if __name__ == "__main__":
     unittest.main()
