@@ -24,7 +24,7 @@ from tqdm import tqdm
 from wordfreq import zipf_frequency
 
 
-from olmocr.bench.tests import TableTest, TestType, normalize_text, parse_html_tables, TextPresenceTest, BaselineTest, FormatTest
+from olmocr.bench.tests import TableTest, TestType, normalize_text, parse_html_tables, TextPresenceTest, BaselineTest, FormatTest, FootnoteTest
 from olmocr.data.renderpdf import (
     get_png_dimensions_from_base64,
     render_pdf_to_base64png,
@@ -1379,6 +1379,84 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
     # Add format tests to the main tests list
     tests.extend(format_tests)
 
+    # Step 6: Generate FootnoteTests for footnotes on the page
+    footnote_tests = []
+
+    # Parse the HTML to find footnotes (without converting superscripts)
+    footnote_soup = BeautifulSoup(html_content, "html.parser")
+
+    # Remove headers and footers from footnote soup
+    for element in footnote_soup.find_all(["header", "footer"]):
+        element.decompose()
+
+    # Strategy 2 only: Look for superscript elements that might be footnote markers
+    sup_elements = footnote_soup.find_all("sup")
+
+    # Generate FootnoteTests
+    max_footnote_tests = 5
+
+    for sup in sup_elements[:10]:  # Check up to 10 superscript elements
+        if len(footnote_tests) >= max_footnote_tests:
+            break
+
+        marker_text = sup.get_text().strip()
+
+        # Check if it's likely a footnote marker (numbers, letters, or common symbols)
+        if not marker_text or not (marker_text.isdigit() or
+                                  (len(marker_text) == 1 and marker_text.isalpha()) or
+                                  marker_text in ['*', '†', '‡', '§', '¶']):
+            continue
+
+        test_data = {
+            "pdf": pdf_filename,
+            "page": 1,
+            "id": f"{pdf_id}_footnote_{uuid.uuid4().hex[:8]}",
+            "type": TestType.FOOTNOTE.value,
+            "marker": marker_text,
+            "max_diffs": 0,
+        }
+
+        # Try to find text that appears before this marker (marker_after field)
+        # Get the parent element and its text
+        parent = sup.parent
+        if parent:
+            parent_text = parent.get_text()
+            # Find where the superscript appears in the parent text
+            marker_pos = parent_text.find(marker_text)
+            if marker_pos > 10:  # Ensure there's enough text before
+                preceding_text = parent_text[:marker_pos].strip()
+                if len(preceding_text) >= 10:
+                    test_data["marker_after"] = normalize_text(preceding_text)[-50:]  # Last 50 chars
+
+        # Try to find footnote text (often appears at bottom of page with same marker)
+        # Look through all text nodes for pattern: marker followed by footnote text
+        page_text = str(footnote_soup)
+
+        # Pattern: find another instance of the same superscript followed by text
+        # This often appears in the footnote section
+        footnote_pattern = rf'<sup[^>]*>{re.escape(marker_text)}</sup>\s*([^<\n]{{20,200}})'
+        matches = re.findall(footnote_pattern, page_text, re.IGNORECASE)
+
+        # If we found multiple matches, the later ones are more likely to be the actual footnote text
+        for match in matches[1:]:  # Skip first match as it's likely the reference, not the definition
+            potential_footnote_text = match.strip()
+            if len(potential_footnote_text) >= 20:
+                test_data["text"] = normalize_text(potential_footnote_text)[:100]
+                break
+
+        # Only create test if we have marker and at least one other field
+        if len(test_data) > 5:  # More than just pdf, page, id, type, max_diffs
+            try:
+                test_obj = FootnoteTest(**test_data)
+                passed, _ = test_obj.run(markdown_content)
+                if passed:
+                    footnote_tests.append(test_data)
+            except Exception:
+                pass
+
+    # Add footnote tests to the main tests list
+    tests.extend(footnote_tests)
+
     # Final test filtering out stage
 
     # Now double check that the absent tests don't find any matches in the markdown_text
@@ -1423,6 +1501,21 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
                     not contains_latex(test["text"]) and
                     not contains_unicode_super_or_subscripts(test["text"])):
                     filtered_tests.append(test)
+            continue
+
+        # Footnote tests have special requirements
+        if test.get("type") == TestType.FOOTNOTE.value:
+            # Markers can contain superscript characters, so don't filter them
+            # But text and marker_after should not contain LaTeX
+            valid = True
+            if "text" in test and test["text"]:
+                if not contains_alphanumeric(test["text"]) or contains_latex(test["text"]):
+                    valid = False
+            if "marker_after" in test and test["marker_after"]:
+                if not contains_alphanumeric(test["marker_after"]) or contains_latex(test["marker_after"]):
+                    valid = False
+            if valid:
+                filtered_tests.append(test)
             continue
 
         # Check all text fields in the test for alphanumeric content, LaTeX, and Unicode super/subscripts
