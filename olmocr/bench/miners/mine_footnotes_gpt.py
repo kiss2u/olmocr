@@ -16,7 +16,7 @@ import argparse
 import os
 import random
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Optional
+from typing import List, Optional
 
 import boto3
 import pypdf
@@ -29,11 +29,14 @@ from olmocr.filter import PdfFilter
 
 TARGET_IMAGE_DIM = 2048
 
+class Footnote(BaseModel):
+    marker: str
+    text: str
 
 class FootnoteDetectionResponse(BaseModel):
     """Structured output for footnote detection."""
 
-    contains_footnotes: bool
+    footnotes: List[Footnote]
 
 
 def download_pdf_from_s3(s3_path: str, local_path: str) -> bool:
@@ -87,18 +90,19 @@ def check_for_footnotes(pdf_path: str, page_num: int, api_key: str) -> Optional[
         image_base64 = render_pdf_to_base64png(pdf_path, page_num=page_num + 1, target_longest_image_dim=TARGET_IMAGE_DIM)
 
         # Simple prompt asking about footnotes
-        prompt = "Does this page contain footnotes? Ex. something you'd mark with a <sup> tag in html and is used to indicate some additional detail at the bottom of the page."
+        prompt = "Does this page contain footnotes? Ex. something you'd mark with a <sup> tag in html and is used to indicate some additional detail at the bottom of the page. " \
+        "Do not include references in this determination. Output all the footnotes with their marker, and any footnote text found."
 
         response = client.beta.chat.completions.parse(
-            model="gpt-4o-2024-08-06",
+            model="gpt-5",
             messages=[
                 {
                     "role": "user",
                     "content": [{"type": "text", "text": prompt}, {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_base64}"}}],
                 }
             ],
-            temperature=0.1,
-            max_tokens=100,
+            temperature=1.0,
+            max_completion_tokens=4000,
             response_format=FootnoteDetectionResponse,
         )
 
@@ -113,10 +117,14 @@ def check_for_footnotes(pdf_path: str, page_num: int, api_key: str) -> Optional[
             print(f"Failed to parse response for {pdf_path} page {page_num}")
             return None
 
-        has_footnotes = parsed_response.contains_footnotes
+        # Check if there are any footnotes in the list
+        footnotes = parsed_response.footnotes
+        has_footnotes = len(footnotes) > 0
 
         if has_footnotes:
-            print(f"Found footnotes in {pdf_path} page {page_num + 1}")
+            print(f"Found {len(footnotes)} footnote(s) in {pdf_path} page {page_num + 1}")
+            for footnote in footnotes:
+                print(f"  - Marker: {footnote.marker}, Text: {footnote.text[:50]}..." if len(footnote.text) > 50 else f"  - Marker: {footnote.marker}, Text: {footnote.text}")
 
         return has_footnotes
 
@@ -225,7 +233,7 @@ def main():
     print(f"Using reservoir sampling with size {reservoir_size}")
 
     with open(args.input_list, "r") as f:
-        for line in f:
+        for line in tqdm(f):
             n += 1
             path = line.strip()
             if not path:
