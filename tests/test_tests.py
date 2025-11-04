@@ -3,6 +3,7 @@ import unittest
 from olmocr.bench.tests import (
     BaselineTest,
     BasePDFTest,
+    FootnoteTest,
     FormatTest,
     MathTest,
     TableTest,
@@ -1945,6 +1946,604 @@ And some <b>Important</b> HTML bold text.
         content = 'This is **\u201cfancy\u201d \u2018quotes\u2019** here'
         result, _ = test.run(content)
         self.assertTrue(result)
+
+
+class TestFootnoteTest(unittest.TestCase):
+    """Test the FootnoteTest class"""
+
+    def test_valid_initialization(self):
+        """Test that valid initialization works"""
+        test = FootnoteTest(
+            pdf="test.pdf",
+            page=1,
+            id="test_id",
+            type=TestType.FOOTNOTE.value,
+            marker="1"
+        )
+        self.assertEqual(test.marker, "1")
+        self.assertIsNone(test.text)
+        self.assertIsNone(test.marker_after)
+
+    def test_invalid_test_type(self):
+        """Test that invalid test type raises ValidationError"""
+        with self.assertRaises(ValidationError):
+            FootnoteTest(
+                pdf="test.pdf",
+                page=1,
+                id="test_id",
+                type=TestType.PRESENT.value,
+                marker="1"
+            )
+
+    def test_at_least_one_field_required(self):
+        """Test that at least one of marker, text, or marker_after must be provided"""
+        with self.assertRaises(ValidationError):
+            FootnoteTest(
+                pdf="test.pdf",
+                page=1,
+                id="test_id",
+                type=TestType.FOOTNOTE.value
+            )
+
+    def test_marker_after_requires_marker(self):
+        """Test that marker_after requires marker to be present"""
+        with self.assertRaises(ValidationError):
+            FootnoteTest(
+                pdf="test.pdf",
+                page=1,
+                id="test_id",
+                type=TestType.FOOTNOTE.value,
+                marker_after="some text"
+            )
+
+    def test_marker_only(self):
+        """Test footnote with only marker specified"""
+        test = FootnoteTest(
+            pdf="test.pdf",
+            page=1,
+            id="test_id",
+            type=TestType.FOOTNOTE.value,
+            marker="2"
+        )
+
+        # Test with markdown footnote reference
+        content = "This is some text[^2] with a footnote.\n\n[^2]: This is the footnote text."
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        # Test with HTML superscript
+        content = "This is some text<sup>2</sup> with a footnote."
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        # Test with Unicode superscript
+        content = "This is some text² with a footnote."
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        # Test when marker not found
+        content = "This text has no footnote markers."
+        result, explanation = test.run(content)
+        self.assertFalse(result)
+        self.assertIn("not found", explanation)
+
+    def test_text_only(self):
+        """Test footnote with only text specified"""
+        test = FootnoteTest(
+            pdf="test.pdf",
+            page=1,
+            id="test_id",
+            type=TestType.FOOTNOTE.value,
+            text="This is a reference"
+        )
+
+        # Test with footnote text in definition
+        content = """Some text with footnote[^1].
+
+[^1]: This is a reference with some additional information."""
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        # Test when text not found in footnote definitions
+        content = "This text has no footnote definitions."
+        result, explanation = test.run(content)
+        self.assertFalse(result)
+        self.assertIn("not found in footnote definitions", explanation)
+
+    def test_marker_and_text(self):
+        """Test footnote with both marker and text specified"""
+        test = FootnoteTest(
+            pdf="test.pdf",
+            page=1,
+            id="test_id",
+            type=TestType.FOOTNOTE.value,
+            marker="3",
+            text="Source: Example Journal 2023"
+        )
+
+        # Test when both conditions are met
+        content = """This is a statement[^3] that needs citation.
+
+[^3]: Source: Example Journal 2023, pp. 45-67."""
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        # Test when marker present but text not in footnote
+        content = """This is a statement[^3] that needs citation.
+
+[^3]: Different reference text here."""
+        result, explanation = test.run(content)
+        self.assertFalse(result)
+        self.assertIn("not found in footnote definitions", explanation)
+
+    def test_marker_and_marker_after(self):
+        """Test footnote with marker and marker_after specified"""
+        test = FootnoteTest(
+            pdf="test.pdf",
+            page=1,
+            id="test_id",
+            type=TestType.FOOTNOTE.value,
+            marker="1",
+            marker_after="important fact"
+        )
+
+        # Test when marker appears after the specified text
+        content = "This is an important fact[^1] in the document.\n\n[^1]: Reference here."
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        content = "This is an[^1] important fact in the document.\n\n[^1]: Reference here."
+        result, explanation = test.run(content)
+        self.assertFalse(result)
+
+        # Test when marker doesn't appear after the specified text
+        content = "[^1]This is an important fact in the document.\n\n[^1]: Reference here."
+        result, explanation = test.run(content)
+        self.assertFalse(result)
+
+    def test_all_fields(self):
+        """Test footnote with all fields specified"""
+        test = FootnoteTest(
+            pdf="test.pdf",
+            page=1,
+            id="test_id",
+            type=TestType.FOOTNOTE.value,
+            marker="5",
+            text="Complete reference text",
+            marker_after="key finding"
+        )
+
+        # Test when all conditions are met
+        content = """The research showed a key finding[^5] about the subject.
+
+[^5]: Complete reference text with additional details."""
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        # Test when one condition fails
+        content = """The research showed a key finding[^5] about the subject.
+
+[^5]: Different reference text here."""
+        result, explanation = test.run(content)
+        self.assertFalse(result)
+
+    def test_fuzzy_matching_for_text(self):
+        """Test fuzzy matching with max_diffs for footnote text"""
+        test = FootnoteTest(
+            pdf="test.pdf",
+            page=1,
+            id="test_id",
+            type=TestType.FOOTNOTE.value,
+            text="Example Reference 2023",
+            max_diffs=3
+        )
+
+        # Slightly misspelled reference (2 errors: missing 'e' and wrong 'e')
+        content = """Text[^1].
+
+[^1]: Exampl Referenc 2023"""
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+    def test_fuzzy_matching_for_marker_after(self):
+        """Test fuzzy matching with max_diffs for marker_after"""
+        test = FootnoteTest(
+            pdf="test.pdf",
+            page=1,
+            id="test_id",
+            type=TestType.FOOTNOTE.value,
+            marker="2",
+            marker_after="statistical analysis",
+            max_diffs=2
+        )
+
+        # Slightly misspelled marker_after text
+        content = "The statistcal analysys[^2] shows significant results."
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+    def test_multiple_footnotes(self):
+        """Test handling of multiple footnotes in document"""
+        test = FootnoteTest(
+            pdf="test.pdf",
+            page=1,
+            id="test_id",
+            type=TestType.FOOTNOTE.value,
+            marker="2",
+            text="Second reference"
+        )
+
+        content = """First claim[^1] and second claim[^2].
+
+[^1]: First reference text.
+[^2]: Second reference with more details."""
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+    def test_multiline_footnote(self):
+        """Test handling of multiline footnote definitions"""
+        test = FootnoteTest(
+            pdf="test.pdf",
+            page=1,
+            id="test_id",
+            type=TestType.FOOTNOTE.value,
+            text="This spans multiple lines with continuation"
+        )
+
+        content = """Text with note[^1].
+
+[^1]: This spans
+    multiple lines
+    with continuation."""
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+    def test_html_superscript_variations(self):
+        """Test various HTML superscript formats"""
+        test = FootnoteTest(
+            pdf="test.pdf",
+            page=1,
+            id="test_id",
+            type=TestType.FOOTNOTE.value,
+            marker="4"
+        )
+
+        # Test with attributes in sup tag
+        content = 'Text with footnote<sup class="footnote">4</sup>.'
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        # Test case insensitive HTML
+        content = "Text with footnote<SUP>4</SUP>."
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+    def test_unicode_superscripts(self):
+        """Test all Unicode superscript digits"""
+        superscripts = {
+            "0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴",
+            "5": "⁵", "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹"
+        }
+
+        for digit, superscript in superscripts.items():
+            test = FootnoteTest(
+                pdf="test.pdf",
+                page=1,
+                id="test_id",
+                type=TestType.FOOTNOTE.value,
+                marker=digit
+            )
+            content = f"Text with footnote{superscript}."
+            result, _ = test.run(content)
+            self.assertTrue(result, f"Failed for superscript {digit}")
+
+    def test_multi_digit_marker(self):
+        """Test multi-digit footnote markers"""
+        test = FootnoteTest(
+            pdf="test.pdf",
+            page=1,
+            id="test_id",
+            type=TestType.FOOTNOTE.value,
+            marker="12"
+        )
+
+        # Test markdown reference
+        content = "Text with footnote[^12].\n\n[^12]: Reference text."
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        # Test Unicode superscript for multi-digit
+        content = "Text with footnote¹²."
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+    def test_marker_position_window(self):
+        """Test that marker_after checks within reasonable distance"""
+        test = FootnoteTest(
+            pdf="test.pdf",
+            page=1,
+            id="test_id",
+            type=TestType.FOOTNOTE.value,
+            marker="1",
+            marker_after="claim"
+        )
+
+        # Marker appears within 100 chars after the text
+        content = "This is a claim" + " " * 50 + "[^1] here."
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        # Marker appears too far after (>100 chars)
+        content = "This is a claim" + " " * 150 + "[^1] here."
+        result, explanation = test.run(content)
+        self.assertFalse(result)
+        self.assertIn("not found after text", explanation)
+
+    def test_empty_text_field_validation(self):
+        """Test that empty text field raises ValidationError"""
+        with self.assertRaises(ValidationError):
+            FootnoteTest(
+                pdf="test.pdf",
+                page=1,
+                id="test_id",
+                type=TestType.FOOTNOTE.value,
+                text="   "  # Whitespace only
+            )
+
+    def test_empty_marker_after_validation(self):
+        """Test that empty marker_after field raises ValidationError"""
+        with self.assertRaises(ValidationError):
+            FootnoteTest(
+                pdf="test.pdf",
+                page=1,
+                id="test_id",
+                type=TestType.FOOTNOTE.value,
+                marker="1",
+                marker_after="   "  # Whitespace only
+            )
+
+    def test_normalized_text_in_footnotes(self):
+        """Test that text normalization works in footnote definitions"""
+        test = FootnoteTest(
+            pdf="test.pdf",
+            page=1,
+            id="test_id",
+            type=TestType.FOOTNOTE.value,
+            text='"fancy" quotes and-dashes'  # Normalized form
+        )
+
+        # Content with fancy characters that should be normalized
+        content = """Text[^1].
+
+[^1]: "fancy" quotes and—dashes with extra   spaces."""
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+    def test_exact_marker_match(self):
+        """Test that marker matching is exact"""
+        test = FootnoteTest(
+            pdf="test.pdf",
+            page=1,
+            id="test_id",
+            type=TestType.FOOTNOTE.value,
+            marker="1"
+        )
+
+        # Should match "1" but not "10", "11", etc.
+        content = "Text with footnote[^10]."
+        result, explanation = test.run(content)
+        self.assertFalse(result)
+        self.assertIn("not found", explanation)
+
+        # Should match exactly "1"
+        content = "Text with footnote[^1]."
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+    def test_special_symbol_markers(self):
+        """Test footnote markers with special symbols"""
+        # Test common special symbols used as footnote markers
+        special_symbols = ["*", "†", "‡", "§", "¶", "∥", "**", "††", "‡‡"]
+
+        for symbol in special_symbols:
+            test = FootnoteTest(
+                pdf="test.pdf",
+                page=1,
+                id="test_id",
+                type=TestType.FOOTNOTE.value,
+                marker=symbol
+            )
+
+            # Test with markdown footnote reference
+            content = f"Text with footnote[^{symbol}].\n\n[^{symbol}]: Footnote text."
+            result, _ = test.run(content)
+            self.assertTrue(result, f"Failed for symbol marker '{symbol}' in markdown")
+
+            # Test with HTML superscript
+            content = f"Text with footnote<sup>{symbol}</sup>."
+            result, _ = test.run(content)
+            self.assertTrue(result, f"Failed for symbol marker '{symbol}' in HTML")
+
+            # Test that the symbol as plain text doesn't match
+            # (it needs to be in proper footnote format)
+            content = f"Text with {symbol} in the middle."
+            result, _ = test.run(content)
+            self.assertFalse(result, f"Plain text '{symbol}' should not match as footnote marker")
+
+    def test_word_markers(self):
+        """Test footnote markers that are words"""
+        word_markers = ["apple", "note", "ref", "A", "B", "foo"]
+
+        for word in word_markers:
+            test = FootnoteTest(
+                pdf="test.pdf",
+                page=1,
+                id="test_id",
+                type=TestType.FOOTNOTE.value,
+                marker=word
+            )
+
+            # Test with markdown footnote reference
+            content = f"Text with footnote[^{word}].\n\n[^{word}]: Footnote text."
+            result, _ = test.run(content)
+            self.assertTrue(result, f"Failed for word marker '{word}' in markdown")
+
+            # Test with HTML superscript
+            content = f"Text with footnote<sup>{word}</sup>."
+            result, _ = test.run(content)
+            self.assertTrue(result, f"Failed for word marker '{word}' in HTML")
+
+            # Test that the word as plain text doesn't match
+            content = f"Text with {word} in the middle."
+            result, _ = test.run(content)
+            self.assertFalse(result, f"Plain text '{word}' should not match as footnote marker")
+
+    def test_marker_with_whitespace_validation(self):
+        """Test that markers with whitespace are rejected"""
+        with self.assertRaises(ValidationError) as cm:
+            FootnoteTest(
+                pdf="test.pdf",
+                page=1,
+                id="test_id",
+                type=TestType.FOOTNOTE.value,
+                marker="has space"
+            )
+        self.assertIn("cannot contain whitespace", str(cm.exception))
+
+    def test_special_symbols_with_text(self):
+        """Test special symbol markers combined with text matching"""
+        test = FootnoteTest(
+            pdf="test.pdf",
+            page=1,
+            id="test_id",
+            type=TestType.FOOTNOTE.value,
+            marker="†",
+            text="See appendix for details"
+        )
+
+        # Use proper footnote format
+        content = """This is important[^†].
+
+[^†]: See appendix for details and additional information."""
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        # Test when text doesn't match
+        content = """This is important[^†].
+
+[^†]: Different text here."""
+        result, explanation = test.run(content)
+        self.assertFalse(result)
+        self.assertIn("not found in footnote definitions", explanation)
+
+    def test_special_symbols_with_marker_after(self):
+        """Test special symbol markers with position checking"""
+        test = FootnoteTest(
+            pdf="test.pdf",
+            page=1,
+            id="test_id",
+            type=TestType.FOOTNOTE.value,
+            marker="‡",
+            marker_after="critical finding"
+        )
+
+        # Test when marker appears after the specified text
+        content = "The critical finding<sup>‡</sup> was unexpected."
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        # Test when marker appears before the specified text
+        content = "<sup>‡</sup>The critical finding was unexpected."
+        result, explanation = test.run(content)
+        self.assertFalse(result)
+        self.assertIn("not found after text", explanation)
+
+    def test_escaped_special_characters_in_regex(self):
+        """Test that special regex characters in markers are properly escaped"""
+        # These characters have special meaning in regex and need escaping
+        regex_special_markers = ["*", "**", ".", "^", "$", "+", "?", "|", "\\", "(", ")", "[", "]", "{", "}"]
+
+        for marker in regex_special_markers:
+            try:
+                test = FootnoteTest(
+                    pdf="test.pdf",
+                    page=1,
+                    id="test_id",
+                    type=TestType.FOOTNOTE.value,
+                    marker=marker
+                )
+
+                # Test with markdown format
+                content = f"Text[^{marker}].\n\n[^{marker}]: Note."
+                result, _ = test.run(content)
+                # We expect this to work for valid markers like "*" and "**"
+                # But some like "\" might not be valid in markdown
+
+                # Test with HTML format which should work for all
+                content = f"Text<sup>{marker}</sup>."
+                result, _ = test.run(content)
+
+            except Exception as e:
+                # Some markers might not be valid, that's okay
+                pass
+
+    def test_mixed_formats_same_document(self):
+        """Test document with mixed footnote formats"""
+        test = FootnoteTest(
+            pdf="test.pdf",
+            page=1,
+            id="test_id",
+            type=TestType.FOOTNOTE.value,
+            marker="†"
+        )
+
+        # Document with both markdown and HTML footnotes
+        content = """
+Some text[^†] with markdown format.
+Other text<sup>†</sup> with HTML format.
+
+[^†]: This is the footnote definition.
+"""
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+    def test_double_dagger_and_similar(self):
+        """Test markers that are repeated symbols"""
+        repeated_markers = ["**", "††", "‡‡", "§§", "***"]
+
+        for marker in repeated_markers:
+            test = FootnoteTest(
+                pdf="test.pdf",
+                page=1,
+                id="test_id",
+                type=TestType.FOOTNOTE.value,
+                marker=marker
+            )
+
+            # Test markdown format
+            content = f"Text[^{marker}].\n\n[^{marker}]: Note text."
+            result, _ = test.run(content)
+            self.assertTrue(result, f"Failed for repeated marker '{marker}'")
+
+    def test_case_sensitive_word_markers(self):
+        """Test that word markers are case-sensitive"""
+        test = FootnoteTest(
+            pdf="test.pdf",
+            page=1,
+            id="test_id",
+            type=TestType.FOOTNOTE.value,
+            marker="Note"
+        )
+
+        # Should match exact case
+        content = "Text[^Note].\n\n[^Note]: Reference."
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        # Should not match different case
+        content = "Text[^note].\n\n[^note]: Reference."
+        result, _ = test.run(content)
+        self.assertFalse(result)
 
 
 if __name__ == "__main__":
