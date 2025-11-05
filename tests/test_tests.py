@@ -1961,8 +1961,8 @@ class TestFootnoteTest(unittest.TestCase):
             marker="1"
         )
         self.assertEqual(test.marker, "1")
-        self.assertIsNone(test.text)
-        self.assertIsNone(test.marker_after)
+        self.assertIsNone(test.appears_before_marker)
+        self.assertIsNone(test.appears_after_marker)
 
     def test_invalid_test_type(self):
         """Test that invalid test type raises ValidationError"""
@@ -1975,9 +1975,9 @@ class TestFootnoteTest(unittest.TestCase):
                 marker="1"
             )
 
-    def test_at_least_one_field_required(self):
-        """Test that at least one of marker, text, or marker_after must be provided"""
-        with self.assertRaises(ValidationError):
+    def test_marker_required(self):
+        """Test that marker field is required"""
+        with self.assertRaises(TypeError):
             FootnoteTest(
                 pdf="test.pdf",
                 page=1,
@@ -1985,16 +1985,6 @@ class TestFootnoteTest(unittest.TestCase):
                 type=TestType.FOOTNOTE.value
             )
 
-    def test_marker_after_requires_marker(self):
-        """Test that marker_after requires marker to be present"""
-        with self.assertRaises(ValidationError):
-            FootnoteTest(
-                pdf="test.pdf",
-                page=1,
-                id="test_id",
-                type=TestType.FOOTNOTE.value,
-                marker_after="some text"
-            )
 
     def test_marker_only(self):
         """Test footnote with only marker specified"""
@@ -2027,138 +2017,130 @@ class TestFootnoteTest(unittest.TestCase):
         self.assertFalse(result)
         self.assertIn("not found", explanation)
 
-    def test_text_only(self):
-        """Test footnote with only text specified"""
-        test = FootnoteTest(
-            pdf="test.pdf",
-            page=1,
-            id="test_id",
-            type=TestType.FOOTNOTE.value,
-            text="This is a reference"
-        )
-
-        # Test with footnote text in definition
-        content = """Some text with footnote[^1].
-
-[^1]: This is a reference with some additional information."""
-        result, _ = test.run(content)
-        self.assertTrue(result)
-
-        # Test when text not found in footnote definitions
-        content = "This text has no footnote definitions."
-        result, explanation = test.run(content)
-        self.assertFalse(result)
-        self.assertIn("not found in footnote definitions", explanation)
-
-    def test_marker_and_text(self):
-        """Test footnote with both marker and text specified"""
-        test = FootnoteTest(
-            pdf="test.pdf",
-            page=1,
-            id="test_id",
-            type=TestType.FOOTNOTE.value,
-            marker="3",
-            text="Source: Example Journal 2023"
-        )
-
-        # Test when both conditions are met
-        content = """This is a statement[^3] that needs citation.
-
-[^3]: Source: Example Journal 2023, pp. 45-67."""
-        result, _ = test.run(content)
-        self.assertTrue(result)
-
-        # Test when marker present but text not in footnote
-        content = """This is a statement[^3] that needs citation.
-
-[^3]: Different reference text here."""
-        result, explanation = test.run(content)
-        self.assertFalse(result)
-        self.assertIn("not found in footnote definitions", explanation)
-
-    def test_marker_and_marker_after(self):
-        """Test footnote with marker and marker_after specified"""
+    def test_appears_before_marker(self):
+        """Test footnote with appears_before_marker specified"""
         test = FootnoteTest(
             pdf="test.pdf",
             page=1,
             id="test_id",
             type=TestType.FOOTNOTE.value,
             marker="1",
-            marker_after="important fact"
+            appears_before_marker="important fact"
         )
 
-        # Test when marker appears after the specified text
-        content = "This is an important fact[^1] in the document.\n\n[^1]: Reference here."
+        # Test when text appears before marker
+        content = "This is an important fact[^1] in the document."
         result, _ = test.run(content)
         self.assertTrue(result)
 
-        content = "This is an[^1] important fact in the document.\n\n[^1]: Reference here."
+        content = "This is an important fact [^1] in the document."
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        content = "This is an important fact\t[^1] in the document."
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+
+        # Test when text doesn't appear before marker
+        content = "This is something else[^1] important fact comes later."
         result, explanation = test.run(content)
         self.assertFalse(result)
+        self.assertIn("not found before", explanation)
 
-        # Test when marker doesn't appear after the specified text
-        content = "[^1]This is an important fact in the document.\n\n[^1]: Reference here."
-        result, explanation = test.run(content)
-        self.assertFalse(result)
-
-    def test_all_fields(self):
-        """Test footnote with all fields specified"""
+    def test_appears_after_marker(self):
+        """Test footnote with appears_after_marker specified"""
         test = FootnoteTest(
             pdf="test.pdf",
             page=1,
             id="test_id",
             type=TestType.FOOTNOTE.value,
-            marker="5",
-            text="Complete reference text",
-            marker_after="key finding"
+            marker="3",
+            appears_after_marker="that needs citation"
         )
 
-        # Test when all conditions are met
-        content = """The research showed a key finding[^5] about the subject.
-
-[^5]: Complete reference text with additional details."""
+        # Test when text appears after marker
+        content = """This is a statement[^3] that needs citation from the study."""
         result, _ = test.run(content)
         self.assertTrue(result)
 
-        # Test when one condition fails
-        content = """The research showed a key finding[^5] about the subject.
+        content = """This is a statement[^3]that needs citation from the study."""
+        result, _ = test.run(content)
+        self.assertTrue(result)
 
-[^5]: Different reference text here."""
+        content = """This is a statement ³that needs citation from the study."""
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+
+        # Test when text doesn't appear after marker
+        content = """This is a statement that needs citation before [^3] the marker."""
         result, explanation = test.run(content)
         self.assertFalse(result)
+        self.assertIn("not found after", explanation)
 
-    def test_fuzzy_matching_for_text(self):
-        """Test fuzzy matching with max_diffs for footnote text"""
+    def test_both_before_and_after(self):
+        """Test footnote with both appears_before_marker and appears_after_marker specified"""
         test = FootnoteTest(
             pdf="test.pdf",
             page=1,
             id="test_id",
             type=TestType.FOOTNOTE.value,
-            text="Example Reference 2023",
+            marker="1",
+            appears_before_marker="important fact",
+            appears_after_marker="documented here"
+        )
+
+        # Test when both conditions are met (can be at different occurrences)
+        content = "This is an important fact[^1] and also[^1] documented here."
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        # Test when both conditions are met at same occurrence
+        content = "This is an important fact[^1] documented here in the text."
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        # Test when one condition is not met
+        content = "This is something else[^1] documented here."
+        result, explanation = test.run(content)
+        self.assertFalse(result)
+
+        content = "Thiis is something else [^1] and also an important fact [^1] documented here."
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+    def test_fuzzy_matching_for_appears_before(self):
+        """Test fuzzy matching with max_diffs for appears_before_marker"""
+        test = FootnoteTest(
+            pdf="test.pdf",
+            page=1,
+            id="test_id",
+            type=TestType.FOOTNOTE.value,
+            marker="1",
+            appears_before_marker="Example Reference",
             max_diffs=3
         )
 
-        # Slightly misspelled reference (2 errors: missing 'e' and wrong 'e')
-        content = """Text[^1].
-
-[^1]: Exampl Referenc 2023"""
+        # Slightly misspelled text before marker
+        content = """The Exampl Referenc[^1] is cited here."""
         result, _ = test.run(content)
         self.assertTrue(result)
 
-    def test_fuzzy_matching_for_marker_after(self):
-        """Test fuzzy matching with max_diffs for marker_after"""
+    def test_fuzzy_matching_for_appears_after(self):
+        """Test fuzzy matching with max_diffs for appears_after_marker"""
         test = FootnoteTest(
             pdf="test.pdf",
             page=1,
             id="test_id",
             type=TestType.FOOTNOTE.value,
             marker="2",
-            marker_after="statistical analysis",
+            appears_after_marker="statistical analysis",
             max_diffs=2
         )
 
-        # Slightly misspelled marker_after text
-        content = "The statistcal analysys[^2] shows significant results."
+        # Slightly misspelled text after marker
+        content = "The reference[^2] statistcal analysys shows significant results."
         result, _ = test.run(content)
         self.assertTrue(result)
 
@@ -2169,8 +2151,7 @@ class TestFootnoteTest(unittest.TestCase):
             page=1,
             id="test_id",
             type=TestType.FOOTNOTE.value,
-            marker="2",
-            text="Second reference"
+            marker="2"
         )
 
         content = """First claim[^1] and second claim[^2].
@@ -2180,23 +2161,17 @@ class TestFootnoteTest(unittest.TestCase):
         result, _ = test.run(content)
         self.assertTrue(result)
 
-    def test_multiline_footnote(self):
-        """Test handling of multiline footnote definitions"""
         test = FootnoteTest(
             pdf="test.pdf",
             page=1,
             id="test_id",
             type=TestType.FOOTNOTE.value,
-            text="This spans multiple lines with continuation"
+            marker="1"
         )
 
-        content = """Text with note[^1].
-
-[^1]: This spans
-    multiple lines
-    with continuation."""
         result, _ = test.run(content)
         self.assertTrue(result)
+
 
     def test_html_superscript_variations(self):
         """Test various HTML superscript formats"""
@@ -2257,41 +2232,29 @@ class TestFootnoteTest(unittest.TestCase):
         result, _ = test.run(content)
         self.assertTrue(result)
 
-    def test_marker_position_window(self):
-        """Test that marker_after checks within reasonable distance"""
+    def test_appears_before_ignores_whitespace(self):
+        """Test that appears_before_marker ignores whitespace and non-alpha characters"""
         test = FootnoteTest(
             pdf="test.pdf",
             page=1,
             id="test_id",
             type=TestType.FOOTNOTE.value,
             marker="1",
-            marker_after="claim"
+            appears_before_marker="claim"
         )
 
-        # Marker appears within 100 chars after the text
-        content = "This is a claim" + " " * 50 + "[^1] here."
+        # Should match even with punctuation and whitespace between
+        content = "This is a claim, ... !![^1] here."
         result, _ = test.run(content)
         self.assertTrue(result)
 
-        # Marker appears too far after (>100 chars)
-        content = "This is a claim" + " " * 150 + "[^1] here."
-        result, explanation = test.run(content)
-        self.assertFalse(result)
-        self.assertIn("not found after text", explanation)
+        # Should match with just spaces
+        content = "This is a claim    [^1] here."
+        result, _ = test.run(content)
+        self.assertTrue(result)
 
-    def test_empty_text_field_validation(self):
-        """Test that empty text field raises ValidationError"""
-        with self.assertRaises(ValidationError):
-            FootnoteTest(
-                pdf="test.pdf",
-                page=1,
-                id="test_id",
-                type=TestType.FOOTNOTE.value,
-                text="   "  # Whitespace only
-            )
-
-    def test_empty_marker_after_validation(self):
-        """Test that empty marker_after field raises ValidationError"""
+    def test_empty_appears_before_validation(self):
+        """Test that empty appears_before_marker field raises ValidationError"""
         with self.assertRaises(ValidationError):
             FootnoteTest(
                 pdf="test.pdf",
@@ -2299,23 +2262,34 @@ class TestFootnoteTest(unittest.TestCase):
                 id="test_id",
                 type=TestType.FOOTNOTE.value,
                 marker="1",
-                marker_after="   "  # Whitespace only
+                appears_before_marker="   "  # Whitespace only
+            )
+
+    def test_empty_appears_after_validation(self):
+        """Test that empty appears_after_marker field raises ValidationError"""
+        with self.assertRaises(ValidationError):
+            FootnoteTest(
+                pdf="test.pdf",
+                page=1,
+                id="test_id",
+                type=TestType.FOOTNOTE.value,
+                marker="1",
+                appears_after_marker="   "  # Whitespace only
             )
 
     def test_normalized_text_in_footnotes(self):
-        """Test that text normalization works in footnote definitions"""
+        """Test that text normalization works in appears_before/after_marker"""
         test = FootnoteTest(
             pdf="test.pdf",
             page=1,
             id="test_id",
             type=TestType.FOOTNOTE.value,
-            text='"fancy" quotes and-dashes'  # Normalized form
+            marker="1",
+            appears_before_marker='"fancy" quotes and-dashes'  # Normalized form
         )
 
         # Content with fancy characters that should be normalized
-        content = """Text[^1].
-
-[^1]: "fancy" quotes and—dashes with extra   spaces."""
+        content = """"fancy" quotes and—dashes[^1] here."""
         result, _ = test.run(content)
         self.assertTrue(result)
 
@@ -2410,33 +2384,29 @@ class TestFootnoteTest(unittest.TestCase):
             )
         self.assertIn("cannot contain whitespace", str(cm.exception))
 
-    def test_special_symbols_with_text(self):
-        """Test special symbol markers combined with text matching"""
+    def test_special_symbols_with_appears_before(self):
+        """Test special symbol markers combined with appears_before_marker"""
         test = FootnoteTest(
             pdf="test.pdf",
             page=1,
             id="test_id",
             type=TestType.FOOTNOTE.value,
             marker="†",
-            text="See appendix for details"
+            appears_before_marker="important"
         )
 
         # Use proper footnote format
-        content = """This is important[^†].
-
-[^†]: See appendix for details and additional information."""
+        content = """This is important[^†] here."""
         result, _ = test.run(content)
         self.assertTrue(result)
 
-        # Test when text doesn't match
-        content = """This is important[^†].
-
-[^†]: Different text here."""
+        # Test when text doesn't appear before
+        content = """This is something[^†] else important."""
         result, explanation = test.run(content)
         self.assertFalse(result)
-        self.assertIn("not found in footnote definitions", explanation)
+        self.assertIn("not found before", explanation)
 
-    def test_special_symbols_with_marker_after(self):
+    def test_special_symbols_with_appears_after(self):
         """Test special symbol markers with position checking"""
         test = FootnoteTest(
             pdf="test.pdf",
@@ -2444,19 +2414,19 @@ class TestFootnoteTest(unittest.TestCase):
             id="test_id",
             type=TestType.FOOTNOTE.value,
             marker="‡",
-            marker_after="critical finding"
+            appears_after_marker="critical finding"
         )
 
-        # Test when marker appears after the specified text
-        content = "The critical finding<sup>‡</sup> was unexpected."
+        # Test when text appears after the marker
+        content = "The reference<sup>‡</sup> critical finding was unexpected."
         result, _ = test.run(content)
         self.assertTrue(result)
 
-        # Test when marker appears before the specified text
-        content = "<sup>‡</sup>The critical finding was unexpected."
+        # Test when text doesn't appear after the marker
+        content = "The critical finding was before <sup>‡</sup> the marker."
         result, explanation = test.run(content)
         self.assertFalse(result)
-        self.assertIn("not found after text", explanation)
+        self.assertIn("not found after", explanation)
 
     def test_escaped_special_characters_in_regex(self):
         """Test that special regex characters in markers are properly escaped"""
@@ -2546,17 +2516,16 @@ Other text<sup>†</sup> with HTML format.
         self.assertFalse(result)
 
     def test_html_footnote_definitions(self):
-        """Test HTML-style footnote definitions where text follows <sup>marker</sup>"""
+        """Test HTML-style footnote definitions"""
         test = FootnoteTest(
             pdf="test.pdf",
             page=1,
             id="test_id",
             type=TestType.FOOTNOTE.value,
-            marker="1",
-            text="This is the footnote text"
+            marker="1"
         )
 
-        # HTML style: <sup>1</sup>This is the footnote text
+        # HTML style: <sup>1</sup> marker
         content = """
 Some text with a reference<sup>1</sup> in the middle.
 
@@ -2573,8 +2542,7 @@ At the bottom:
             page=1,
             id="test_id",
             type=TestType.FOOTNOTE.value,
-            marker="†",
-            text="See appendix for details"
+            marker="†"
         )
 
         # HTML style with special symbol
@@ -2594,8 +2562,7 @@ Important finding<sup>†</sup> in the research.
             page=1,
             id="test_id",
             type=TestType.FOOTNOTE.value,
-            marker="1",
-            text="First reference"
+            marker="1"
         )
 
         content = """
@@ -2614,8 +2581,7 @@ First point[^1] and second point<sup>2</sup>.
             page=1,
             id="test_id",
             type=TestType.FOOTNOTE.value,
-            marker="2",
-            text="Second reference"
+            marker="2"
         )
         result, _ = test2.run(content)
         self.assertTrue(result)
@@ -2627,8 +2593,7 @@ First point[^1] and second point<sup>2</sup>.
             page=1,
             id="test_id",
             type=TestType.FOOTNOTE.value,
-            marker="3",
-            text="This footnote text spans multiple lines with more information"
+            marker="3"
         )
 
         content = """
@@ -2669,7 +2634,7 @@ A long-standing dream of AI has been to build systems that can perform scientifi
             id="test_id",
             type=TestType.FOOTNOTE.value,
             marker="1",
-            marker_after="Code available at github.com/allenai/discoveryworld."
+            appears_before_marker="Code available at github.com/allenai/discoveryworld."
         )
 
         result, _ = test.run(content)
@@ -2681,7 +2646,7 @@ A long-standing dream of AI has been to build systems that can perform scientifi
             id="test_id",
             type=TestType.FOOTNOTE.value,
             marker="1",
-            text="Released under Apache-2.0 license"
+            appears_after_marker="Released under Apache"
         )
 
         result, _ = test.run(content)

@@ -622,42 +622,38 @@ class FootnoteTest(BasePDFTest):
     Test to verify that footnotes appear correctly on a page.
 
     Attributes:
-        marker: The footnote marker (e.g., "1", "2"). Must appear as superscript or [^marker].
-        text: The footnote text that should appear in the footnote area.
-        marker_after: Text that should precede the footnote marker in the main body.
+        marker: The footnote marker (e.g., "1", "2"). Must appear as superscript or [^marker]. Required.
+        appears_before_marker: Optional text that should appear before the marker (ignoring whitespace/non-alpha).
+        appears_after_marker: Optional text that should appear after the marker (ignoring whitespace/non-alpha).
     """
 
-    marker: Optional[str] = None
-    text: Optional[str] = None
-    marker_after: Optional[str] = None
+    marker: str
+    appears_before_marker: Optional[str] = None
+    appears_after_marker: Optional[str] = None
 
     def __post_init__(self):
         super().__post_init__()
         if self.type != TestType.FOOTNOTE.value:
             raise ValidationError(f"Invalid type for FootnoteTest: {self.type}")
 
-        # At least one field must be provided
-        if not any([self.marker, self.text, self.marker_after]):
-            raise ValidationError("At least one of marker, text, or marker_after must be provided")
-
-        # marker_after requires marker to be present
-        if self.marker_after and not self.marker:
-            raise ValidationError("marker_after requires marker to be present")
+        # marker is required
+        if not self.marker:
+            raise ValidationError("marker field is required")
 
         # Validate marker doesn't contain whitespace
-        if self.marker and ' ' in self.marker:
+        if ' ' in self.marker:
             raise ValidationError("Marker cannot contain whitespace")
 
-        # Normalize the text fields
-        if self.text:
-            self.text = normalize_text(self.text)
-            if not self.text.strip():
-                raise ValidationError("Text field cannot be empty if provided")
+        # Normalize the optional text fields
+        if self.appears_before_marker:
+            self.appears_before_marker = normalize_text(self.appears_before_marker)
+            if not self.appears_before_marker.strip():
+                raise ValidationError("appears_before_marker field cannot be empty if provided")
 
-        if self.marker_after:
-            self.marker_after = normalize_text(self.marker_after)
-            if not self.marker_after.strip():
-                raise ValidationError("marker_after field cannot be empty if provided")
+        if self.appears_after_marker:
+            self.appears_after_marker = normalize_text(self.appears_after_marker)
+            if not self.appears_after_marker.strip():
+                raise ValidationError("appears_after_marker field cannot be empty if provided")
 
     def run(self, md_content: str) -> Tuple[bool, str]:
         """
@@ -670,140 +666,119 @@ class FootnoteTest(BasePDFTest):
             A tuple (passed, explanation) where 'passed' is True if the test passes,
             and 'explanation' provides details when the test fails.
         """
-        failures = []
+        # Find all occurrences of the marker in various formats
+        marker_positions = []
 
-        # Test 1: Check if marker appears in the main body (if marker is provided)
-        if self.marker:
-            marker_found = False
+        # Check for markdown footnote reference [^marker] (but not definition [^marker]:)
+        markdown_pattern = rf"\[\^{re.escape(self.marker)}\](?!:)"
+        for match in re.finditer(markdown_pattern, md_content):
+            marker_positions.append({
+                'start': match.start(),
+                'end': match.end(),
+                'type': 'markdown'
+            })
 
-            # Check for markdown footnote reference [^marker] (but not definition [^marker]:)
-            markdown_pattern = rf"\[\^{re.escape(self.marker)}\](?!:)"
-            if re.search(markdown_pattern, md_content):
-                marker_found = True
+        # Check for superscript HTML <sup>marker</sup>
+        html_sup_pattern = rf"<sup[^>]*>{re.escape(self.marker)}</sup>"
+        for match in re.finditer(html_sup_pattern, md_content, re.IGNORECASE):
+            marker_positions.append({
+                'start': match.start(),
+                'end': match.end(),
+                'type': 'html'
+            })
 
-            # Check for superscript HTML <sup>marker</sup>
-            html_sup_pattern = rf"<sup[^>]*>{re.escape(self.marker)}</sup>"
-            if re.search(html_sup_pattern, md_content, re.IGNORECASE):
-                marker_found = True
+        # Check for Unicode superscript characters (for common digits)
+        superscript_map = {
+            '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴',
+            '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹'
+        }
 
-            # Check for Unicode superscript characters (for common digits)
-            superscript_map = {
-                '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴',
-                '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹'
-            }
+        # Convert marker to superscript if all characters are digits
+        if all(c in superscript_map for c in self.marker):
+            superscript_marker = ''.join(superscript_map[c] for c in self.marker)
+            for match in re.finditer(re.escape(superscript_marker), md_content):
+                marker_positions.append({
+                    'start': match.start(),
+                    'end': match.end(),
+                    'type': 'unicode'
+                })
 
-            # Convert marker to superscript if all characters are digits
-            if all(c in superscript_map for c in self.marker):
-                superscript_marker = ''.join(superscript_map[c] for c in self.marker)
-                if superscript_marker in md_content:
-                    marker_found = True
+        # If no markers found at all, fail
+        if not marker_positions:
+            return False, f"Footnote marker '{self.marker}' not found as [^{self.marker}], <sup>{self.marker}</sup>, or superscript"
 
-            if not marker_found:
-                failures.append(f"Footnote marker '{self.marker}' not found as [^{self.marker}], <sup>{self.marker}</sup>, or superscript")
-
-        # Test 2: Check if footnote text appears in footnote area (if text is provided)
-        if self.text:
-            text_found = False
-            normalized_content = normalize_text(md_content)
-
-            # Look for markdown footnote definitions [^X]: text
-            # This pattern matches [^anything]: followed by text that might span multiple lines
-            footnote_pattern = r'\[\^[^\]]+\]:\s*(.+?)(?=\n\[\^|\n\n|\Z)'
-            footnote_matches = re.findall(footnote_pattern, md_content, re.DOTALL | re.MULTILINE)
-
-            # Also look for HTML-style footnote definitions: <sup>marker</sup> followed by text
-            # This is common in HTML documents where footnote text appears right after the superscript
-            if self.marker:
-                # Pattern to match <sup>marker</sup> followed by footnote text
-                # We capture text until we hit another <sup> tag or double newline
-                html_footnote_pattern = rf'<sup[^>]*>{re.escape(self.marker)}</sup>\s*([^<\n]+(?:\n(?!\n)[^<\n]+)*)'
-                html_matches = re.findall(html_footnote_pattern, md_content, re.IGNORECASE)
-                footnote_matches.extend(html_matches)
-
-                # Additionally check for unicode superscript markers followed by text (e.g., ¹Text)
-                unicode_superscript_map = {
-                    '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴',
-                    '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹'
-                }
-
-                if all(c in unicode_superscript_map for c in self.marker):
-                    unicode_marker = ''.join(unicode_superscript_map[c] for c in self.marker)
-                    unicode_pattern = rf'{re.escape(unicode_marker)}\s*([^\n]+(?:\n(?!\n)[^\n]+)*)'
-                    unicode_matches = re.findall(unicode_pattern, md_content)
-                    footnote_matches.extend(unicode_matches)
-
-            # Check each footnote text for a match
-            threshold = 1.0 - (self.max_diffs / (len(self.text) if len(self.text) > 0 else 1))
-            for footnote_text in footnote_matches:
-                normalized_footnote = normalize_text(footnote_text)
-                similarity = fuzz.partial_ratio(self.text, normalized_footnote) / 100.0
-                if similarity >= threshold:
-                    text_found = True
-                    break
-
-            if not text_found:
-                failures.append(f"Footnote text '{self.text[:40]}...' not found in footnote definitions with threshold {threshold}")
-
-        # Test 3: Check if marker appears after specified text (if marker_after is provided)
-        # Note: marker_after always requires marker to be present (validated in __post_init__)
-        if self.marker_after:
-            position_correct = False
-
-            # Find positions of marker_after text (with fuzzy matching) in original content
-            # We use find_near_matches on the original content to preserve positions
-            threshold = 1.0 - (self.max_diffs / (len(self.marker_after) if len(self.marker_after) > 0 else 1))
-
-            # Since find_near_matches is case-sensitive, we need to handle normalization carefully
-            # We'll search in the normalized content but use the original content positions
-            normalized_content = normalize_text(md_content)
-            normalized_marker_after = self.marker_after
-
-            # Find matches in normalized content
-            marker_after_matches = find_near_matches(normalized_marker_after, normalized_content, max_l_dist=self.max_diffs)
-
-            if marker_after_matches:
-                # For each match of marker_after, check if a marker follows it
-                for match in marker_after_matches:
-                    # Since we found the match in normalized content, we need to use the same position in original
-                    # This works because normalize_text doesn't change positions significantly for most text
-                    # Look for the marker after this position in the original content
-                    text_after_match = md_content[match.end:]
-
-                    # Check for the marker in various forms within reasonable distance (100 chars)
-                    search_window = text_after_match[:100] if len(text_after_match) > 100 else text_after_match
-
-                    # Check markdown footnote reference (but NOT footnote definition)
-                    # [^marker] is a reference, [^marker]: is a definition
-                    if re.search(rf"\[\^{re.escape(self.marker)}\](?!:)", search_window):
-                        position_correct = True
-                        break
-
-                    # Check HTML superscript
-                    if re.search(rf"<sup[^>]*>{re.escape(self.marker)}</sup>", search_window, re.IGNORECASE):
-                        position_correct = True
-                        break
-
-                    # Check Unicode superscript
-                    superscript_map = {
-                        '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴',
-                        '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹'
-                    }
-                    if all(c in superscript_map for c in self.marker):
-                        superscript_marker = ''.join(superscript_map[c] for c in self.marker)
-                        if superscript_marker in search_window:
-                            position_correct = True
-                            break
-
-                if not position_correct:
-                    failures.append(f"Marker '{self.marker}' not found after text '{self.marker_after[:40]}...'")
-            else:
-                failures.append(f"Text '{self.marker_after[:40]}...' not found to check marker position")
-
-        # If any test was performed and all passed, return success
-        if not failures:
+        # If no additional checks needed, pass
+        if not self.appears_before_marker and not self.appears_after_marker:
             return True, ""
-        else:
+
+        # Helper function to clean text for comparison (remove whitespace and non-alpha)
+        def clean_for_comparison(text):
+            # Remove all non-alphanumeric characters and normalize
+            return ''.join(c for c in normalize_text(text) if c.isalnum()).lower()
+
+        # Check appears_before_marker if provided
+        before_found = False if self.appears_before_marker else True
+        if self.appears_before_marker:
+            clean_target_before = clean_for_comparison(self.appears_before_marker)
+            threshold = 1.0 - (self.max_diffs / (len(self.appears_before_marker) if len(self.appears_before_marker) > 0 else 1))
+
+            for pos in marker_positions:
+                # Get text before this marker position
+                start_pos = max(0, pos['start'] - 200)  # Look back up to 200 chars
+                text_before = md_content[start_pos:pos['start']]
+
+                # Clean the text before for comparison
+                clean_text_before = clean_for_comparison(text_before)
+
+                # Check if appears_before_marker is at the end of this text (using fuzzy matching)
+                if clean_text_before:
+                    # Use partial_ratio to check if target appears at the end
+                    # We'll check the last portion that's roughly the size of our target
+                    check_length = min(len(clean_text_before), len(clean_target_before) * 2)
+                    text_to_check = clean_text_before[-check_length:] if check_length > 0 else clean_text_before
+
+                    similarity = fuzz.partial_ratio(clean_target_before, text_to_check) / 100.0
+                    if similarity >= threshold:
+                        before_found = True
+                        break
+
+        # Check appears_after_marker if provided
+        after_found = False if self.appears_after_marker else True
+        if self.appears_after_marker:
+            clean_target_after = clean_for_comparison(self.appears_after_marker)
+            threshold = 1.0 - (self.max_diffs / (len(self.appears_after_marker) if len(self.appears_after_marker) > 0 else 1))
+
+            for pos in marker_positions:
+                # Get text after this marker position
+                end_pos = min(len(md_content), pos['end'] + 200)  # Look ahead up to 200 chars
+                text_after = md_content[pos['end']:end_pos]
+
+                # Clean the text after for comparison
+                clean_text_after = clean_for_comparison(text_after)
+
+                # Check if appears_after_marker is at the beginning of this text (using fuzzy matching)
+                if clean_text_after:
+                    # Use partial_ratio to check if target appears at the beginning
+                    # We'll check the first portion that's roughly the size of our target
+                    check_length = min(len(clean_text_after), len(clean_target_after) * 2)
+                    text_to_check = clean_text_after[:check_length] if check_length > 0 else clean_text_after
+
+                    similarity = fuzz.partial_ratio(clean_target_after, text_to_check) / 100.0
+                    if similarity >= threshold:
+                        after_found = True
+                        break
+
+        # Build failure message if needed
+        failures = []
+        if self.appears_before_marker and not before_found:
+            failures.append(f"Text '{self.appears_before_marker[:40]}...' not found before any occurrence of marker '{self.marker}'")
+        if self.appears_after_marker and not after_found:
+            failures.append(f"Text '{self.appears_after_marker[:40]}...' not found after any occurrence of marker '{self.marker}'")
+
+        if failures:
             return False, "; ".join(failures)
+        else:
+            return True, ""
 
 
 def load_single_test(data: Union[str, Dict]) -> BasePDFTest:
