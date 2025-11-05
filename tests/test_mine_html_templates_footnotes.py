@@ -61,7 +61,7 @@ class TestFootnoteTestGeneration(unittest.TestCase):
                     "type": "footnote",
                     "marker": "1",
                     "max_diffs": 0,
-                    "marker_after": "reference",
+                    "appears_before_marker": "Alpha with reference",
                 }
             ]),
         )
@@ -86,8 +86,8 @@ class TestFootnoteTestGeneration(unittest.TestCase):
                     "type": "footnote",
                     "marker": "1",
                     "max_diffs": 0,
-                    "marker_after": "reference",
-                    "text": "This is the footnote text that elaborates on the reference in detail.",
+                    "appears_before_marker": "Alpha with reference",
+                    "appears_after_marker": "This is the",
                 }
             ]),
         )
@@ -115,8 +115,8 @@ class TestFootnoteTestGeneration(unittest.TestCase):
                     "type": "footnote",
                     "marker": "1",
                     "max_diffs": 0,
-                    "marker_after": "marker",
-                    "text": "Definition for footnote one with ample descriptive content to qualify.",
+                    "appears_before_marker": "ends with marker",
+                    "appears_after_marker": "Definition for footnote",
                 },
                 {
                     "pdf": "test_pdf_page1.pdf",
@@ -124,8 +124,8 @@ class TestFootnoteTestGeneration(unittest.TestCase):
                     "type": "footnote",
                     "marker": "2",
                     "max_diffs": 0,
-                    "marker_after": "marker",
-                    "text": "Definition for footnote two including enough characters to be captured correctly.",
+                    "appears_before_marker": "paragraph carries marker",
+                    "appears_after_marker": "Definition for footnote",
                 },
                 {
                     "pdf": "test_pdf_page1.pdf",
@@ -133,7 +133,7 @@ class TestFootnoteTestGeneration(unittest.TestCase):
                     "type": "footnote",
                     "marker": "3",
                     "max_diffs": 0,
-                    "marker_after": "marker",
+                    "appears_before_marker": "a lone marker",
                 },
             ]),
         )

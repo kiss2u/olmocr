@@ -1413,9 +1413,6 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
 
         marker_sup_map[marker_text].append(sup)
 
-    page_text = str(footnote_soup)
-    footnote_pattern_template = r'<sup[^>]*>{marker}</sup>\s*([^<\n]{{20,200}})'
-
     for marker_text, marker_superscripts in marker_sup_map.items():
         test_data = {
             "pdf": pdf_filename,
@@ -1426,8 +1423,8 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
             "max_diffs": 0,
         }
 
-        # Try to find text that appears before this marker (marker_after field)
-        marker_after_candidate = None
+        # Extract text context for each occurrence
+        occurrences = []
         for sup in marker_superscripts:
             parent = sup.parent
             if not parent:
@@ -1435,49 +1432,64 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
 
             parent_text = parent.get_text()
             marker_pos = parent_text.find(marker_text)
+
+            before_text = None
+            after_text = None
+
+            # Extract text before marker
             if marker_pos > 10:
                 preceding_text = parent_text[:marker_pos].strip()
                 if len(preceding_text) >= 10:
-                    last_word = preceding_text.split()[-1] if preceding_text.split() else preceding_text
-                    candidate = normalize_text(last_word)
-                    if candidate:
-                        marker_after_candidate = candidate
-                        break
+                    words = preceding_text.split()
+                    if len(words) >= 2:
+                        last_words = ' '.join(words[-3:]) if len(words) >= 3 else ' '.join(words)
+                    else:
+                        last_words = preceding_text
+                    candidate = normalize_text(last_words)
+                    if candidate and len(candidate) >= 5:
+                        before_text = candidate
 
-        if marker_after_candidate:
-            test_data["marker_after"] = marker_after_candidate
+            # Extract text after marker
+            if marker_pos >= 0 and marker_pos + len(marker_text) < len(parent_text):
+                following_text = parent_text[marker_pos + len(marker_text):].strip()
+                if len(following_text) >= 10:
+                    words = following_text.split()
+                    if len(words) >= 2:
+                        first_words = ' '.join(words[:3]) if len(words) >= 3 else ' '.join(words)
+                    else:
+                        first_words = following_text[:50]
+                    candidate = normalize_text(first_words)
+                    if candidate and len(candidate) >= 5:
+                        after_text = candidate
 
-        # Add footnote text only when the marker appears at least twice (reference + definition)
-        if len(marker_superscripts) >= 2:
-            footnote_pattern = footnote_pattern_template.format(marker=re.escape(marker_text))
-            matches = re.findall(footnote_pattern, page_text, re.IGNORECASE)
+            occurrences.append({
+                'before': before_text,
+                'after': after_text
+            })
 
-            best_text = None
-            if len(matches) > 1:
-                candidate_matches = matches[1:]
-            else:
-                candidate_matches = matches
+        # Apply logic based on number of occurrences
+        if len(occurrences) >= 2:
+            # If marker exists 2+ times: use before from first, after from second
+            if occurrences[0]['before']:
+                test_data["appears_before_marker"] = occurrences[0]['before']
+            if occurrences[1]['after']:
+                test_data["appears_after_marker"] = occurrences[1]['after']
+        elif len(occurrences) == 1:
+            # If marker exists 1 time: prefer left text, then right text
+            if occurrences[0]['before']:
+                test_data["appears_before_marker"] = occurrences[0]['before']
+            elif occurrences[0]['after']:
+                test_data["appears_after_marker"] = occurrences[0]['after']
+            # If neither before nor after text exists, we'll just have the marker
 
-            for match in candidate_matches:
-                potential_text = match.strip()
-                if len(potential_text) >= 20:
-                    normalized = normalize_text(potential_text)
-                    if normalized:
-                        if not best_text or len(potential_text) > len(best_text):
-                            best_text = normalized[:100]
-
-            if best_text:
-                test_data["text"] = best_text
-
-        # Only create test if we have marker and at least one other field
-        if len(test_data) > 5:
-            try:
-                test_obj = FootnoteTest(**test_data)
-                passed, _ = test_obj.run(markdown_content)
-                if passed:
-                    footnote_tests.append(test_data)
-            except Exception:
-                pass
+        # Create test even if we only have the marker (no additional fields required)
+        try:
+            test_obj = FootnoteTest(**test_data)
+            passed, _ = test_obj.run(markdown_content)
+            if passed:
+                footnote_tests.append(test_data)
+        except Exception:
+            pass
 
     # Add footnote tests to the main tests list
     tests.extend(footnote_tests)
@@ -1531,13 +1543,13 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
         # Footnote tests have special requirements
         if test.get("type") == TestType.FOOTNOTE.value:
             # Markers can contain superscript characters, so don't filter them
-            # But text and marker_after should not contain LaTeX
+            # But appears_before_marker and appears_after_marker should not contain LaTeX
             valid = True
-            if "text" in test and test["text"]:
-                if not contains_alphanumeric(test["text"]) or contains_latex(test["text"]):
+            if "appears_before_marker" in test and test["appears_before_marker"]:
+                if not contains_alphanumeric(test["appears_before_marker"]) or contains_latex(test["appears_before_marker"]):
                     valid = False
-            if "marker_after" in test and test["marker_after"]:
-                if not contains_alphanumeric(test["marker_after"]) or contains_latex(test["marker_after"]):
+            if "appears_after_marker" in test and test["appears_after_marker"]:
+                if not contains_alphanumeric(test["appears_after_marker"]) or contains_latex(test["appears_after_marker"]):
                     valid = False
             if valid:
                 filtered_tests.append(test)
