@@ -13,6 +13,10 @@
 #   ./scripts/run_benchmark.sh --repeats 3
 #  With noperf flag: skip the performance test job
 #   ./scripts/run_benchmark.sh --noperf
+#  With benchrepo parameter: use a different benchmark dataset repository (default: allenai/olmOCR-bench)
+#   ./scripts/run_benchmark.sh --benchrepo allenai/olmOCR-bench-internal
+#  With benchbranch parameter: use a specific branch/revision of the benchmark dataset
+#   ./scripts/run_benchmark.sh --benchbranch olmOCR-bench-1125
 
 set -e
 
@@ -20,6 +24,7 @@ set -e
 MODEL=""
 CLUSTER=""
 BENCH_BRANCH=""
+BENCH_REPO=""
 BEAKER_IMAGE=""
 REPEATS="1"
 NOPERF=""
@@ -37,6 +42,10 @@ while [[ $# -gt 0 ]]; do
             BENCH_BRANCH="$2"
             shift 2
             ;;
+        --benchrepo)
+            BENCH_REPO="$2"
+            shift 2
+            ;;
         --beaker-image)
             BEAKER_IMAGE="$2"
             shift 2
@@ -51,7 +60,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         *)
             echo "Unknown option: $1"
-            echo "Usage: $0 [--model MODEL_NAME] [--cluster CLUSTER_NAME] [--benchbranch BRANCH_NAME] [--beaker-image IMAGE_NAME] [--repeats NUMBER] [--noperf]"
+            echo "Usage: $0 [--model MODEL_NAME] [--cluster CLUSTER_NAME] [--benchbranch BRANCH_NAME] [--benchrepo REPO_URL] [--beaker-image IMAGE_NAME] [--repeats NUMBER] [--noperf]"
             exit 1
             ;;
     esac
@@ -121,7 +130,7 @@ cat << 'EOF' > /tmp/run_benchmark_experiment.py
 import sys
 from beaker import Beaker, ExperimentSpec, TaskSpec, TaskContext, ResultSpec, TaskResources, ImageSource, Priority, Constraints, EnvVar
 
-# Get image tag, beaker user, git branch, git hash, optional model, cluster, bench branch, and repeats from command line
+# Get image tag, beaker user, git branch, git hash, optional model, cluster, bench branch, bench repo, and repeats from command line
 image_tag = sys.argv[1]
 beaker_user = sys.argv[2]
 git_branch = sys.argv[3]
@@ -129,6 +138,7 @@ git_hash = sys.argv[4]
 model = None
 cluster = None
 bench_branch = None
+bench_repo = "allenai/olmOCR-bench"  # Default repository
 repeats = 1
 noperf = False
 
@@ -140,6 +150,9 @@ while arg_idx < len(sys.argv):
         arg_idx += 2
     elif sys.argv[arg_idx] == "--benchbranch":
         bench_branch = sys.argv[arg_idx + 1]
+        arg_idx += 2
+    elif sys.argv[arg_idx] == "--benchrepo":
+        bench_repo = sys.argv[arg_idx + 1]
         arg_idx += 2
     elif sys.argv[arg_idx] == "--repeats":
         repeats = int(sys.argv[arg_idx + 1])
@@ -167,6 +180,17 @@ except:
     has_aws_creds = False
     print(f"AWS credentials secret not found: {aws_creds_secret}")
 
+# Check if HF_TOKEN secret exists
+hf_token_secret = f"{beaker_user}-HF_TOKEN"
+try:
+    # Try to get the secret to see if it exists
+    b.secret.get(hf_token_secret, workspace="ai2/olmocr")
+    has_hf_token = True
+    print(f"Found HuggingFace token secret: {hf_token_secret}")
+except:
+    has_hf_token = False
+    print(f"HuggingFace token secret not found: {hf_token_secret}")
+
 # First experiment: Original benchmark job
 commands = []
 if has_aws_creds:
@@ -175,15 +199,16 @@ if has_aws_creds:
         'echo "$AWS_CREDENTIALS_FILE" > ~/.aws/credentials'
     ])
 
-# Build git clone command with optional branch
-git_clone_cmd = "git clone https://huggingface.co/datasets/allenai/olmOCR-bench"
-if bench_branch:
-    git_clone_cmd += f" -b {bench_branch}"
+if has_hf_token:
+    commands.append('export HF_TOKEN="$HF_TOKEN"')
 
-commands.extend([
-    git_clone_cmd,
-    "cd olmOCR-bench && git lfs pull && cd ..",
-])
+# Build huggingface-cli download command
+hf_download_cmd = f"huggingface-cli download --repo-type dataset {bench_repo}"
+if bench_branch:
+    hf_download_cmd += f" --revision {bench_branch}"
+hf_download_cmd += " --local-dir ./olmOCR-bench"
+
+commands.append(hf_download_cmd)
 
 # Run pipeline multiple times based on repeats
 for i in range(1, repeats + 1):
@@ -234,11 +259,14 @@ task_spec_args = {
     "result": ResultSpec(path="/noop-results"),
 }
 
-# Add env vars if AWS credentials exist
+# Add env vars if AWS credentials or HF token exist
+env_vars = []
 if has_aws_creds:
-    task_spec_args["env_vars"] = [
-        EnvVar(name="AWS_CREDENTIALS_FILE", secret=aws_creds_secret)
-    ]
+    env_vars.append(EnvVar(name="AWS_CREDENTIALS_FILE", secret=aws_creds_secret))
+if has_hf_token:
+    env_vars.append(EnvVar(name="HF_TOKEN", secret=hf_token_secret))
+if env_vars:
+    task_spec_args["env_vars"] = env_vars
 
 # Create first experiment spec
 experiment_spec = ExperimentSpec(
@@ -266,6 +294,8 @@ if not noperf:
             "mkdir -p ~/.aws",
             'echo "$AWS_CREDENTIALS_FILE" > ~/.aws/credentials'
         ])
+    if has_hf_token:
+        perf_commands.append('export HF_TOKEN="$HF_TOKEN"')
     perf_commands.append(perf_pipeline_cmd)
 
     # Build performance task spec
@@ -286,11 +316,14 @@ if not noperf:
         "result": ResultSpec(path="/noop-results"),
     }
 
-    # Add env vars if AWS credentials exist
+    # Add env vars if AWS credentials or HF token exist
+    env_vars = []
     if has_aws_creds:
-        perf_task_spec_args["env_vars"] = [
-            EnvVar(name="AWS_CREDENTIALS_FILE", secret=aws_creds_secret)
-        ]
+        env_vars.append(EnvVar(name="AWS_CREDENTIALS_FILE", secret=aws_creds_secret))
+    if has_hf_token:
+        env_vars.append(EnvVar(name="HF_TOKEN", secret=hf_token_secret))
+    if env_vars:
+        perf_task_spec_args["env_vars"] = env_vars
 
     # Create performance experiment spec
     perf_experiment_spec = ExperimentSpec(
@@ -326,6 +359,11 @@ fi
 if [ -n "$BENCH_BRANCH" ]; then
     echo "Using bench branch: $BENCH_BRANCH"
     CMD="$CMD --benchbranch $BENCH_BRANCH"
+fi
+
+if [ -n "$BENCH_REPO" ]; then
+    echo "Using bench repo: $BENCH_REPO"
+    CMD="$CMD --benchrepo $BENCH_REPO"
 fi
 
 if [ "$REPEATS" != "1" ]; then
