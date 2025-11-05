@@ -138,7 +138,26 @@ class TestFootnoteTestGeneration(unittest.TestCase):
             ]),
         )
 
+    def test_cutoff(self):
+        html_content = """<html><body>Your personal data is processed in accordance with Regulation (EU) No 2018/1725<sup><a href="#footnote1">1</a></sup> on the protection of individuals with regard to the processing of personal data by the Union institutions, bodies, offices and agencies and on the free movement of such data.</body></html>"""
 
+        footnote_tests = self._generate_footnote_tests(html_content)
+
+        self.assertEqual(len(footnote_tests), 1)
+
+        self.assertSetEqual(
+            footnote_tests,
+            self._hashable_tests([
+                {
+                    "pdf": "test_pdf_page1.pdf",
+                    "page": 1,
+                    "type": "footnote",
+                    "marker": "1",
+                    "max_diffs": 0,
+                    "appears_before_marker": "(EU) No 2018/1725",
+                },
+            ]),
+        )
 
 if __name__ == "__main__":
     unittest.main()

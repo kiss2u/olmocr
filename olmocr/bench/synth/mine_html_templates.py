@@ -1430,37 +1430,55 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
             if not parent:
                 continue
 
-            parent_text = parent.get_text()
-            marker_pos = parent_text.find(marker_text)
-
+            # Get text before and after the sup element by reconstructing parent content
             before_text = None
             after_text = None
 
-            # Extract text before marker
-            if marker_pos > 10:
-                preceding_text = parent_text[:marker_pos].strip()
-                if len(preceding_text) >= 10:
-                    words = preceding_text.split()
-                    if len(words) >= 2:
-                        last_words = ' '.join(words[-3:]) if len(words) >= 3 else ' '.join(words)
-                    else:
-                        last_words = preceding_text
-                    candidate = normalize_text(last_words)
-                    if candidate and len(candidate) >= 5:
-                        before_text = candidate
+            # Get all content before this sup element
+            text_before_sup = []
+            for sibling in parent.children:
+                if sibling == sup:
+                    break
+                if isinstance(sibling, str):
+                    text_before_sup.append(sibling)
+                else:
+                    text_before_sup.append(sibling.get_text())
 
-            # Extract text after marker
-            if marker_pos >= 0 and marker_pos + len(marker_text) < len(parent_text):
-                following_text = parent_text[marker_pos + len(marker_text):].strip()
-                if len(following_text) >= 10:
-                    words = following_text.split()
-                    if len(words) >= 2:
-                        first_words = ' '.join(words[:3]) if len(words) >= 3 else ' '.join(words)
+            # Get all content after this sup element
+            found_sup = False
+            text_after_sup = []
+            for sibling in parent.children:
+                if found_sup:
+                    if isinstance(sibling, str):
+                        text_after_sup.append(sibling)
                     else:
-                        first_words = following_text[:50]
-                    candidate = normalize_text(first_words)
-                    if candidate and len(candidate) >= 5:
-                        after_text = candidate
+                        text_after_sup.append(sibling.get_text())
+                elif sibling == sup:
+                    found_sup = True
+
+            # Process text before marker
+            preceding_text = ''.join(text_before_sup).strip()
+            if len(preceding_text) >= 10:
+                words = preceding_text.split()
+                if len(words) >= 2:
+                    last_words = ' '.join(words[-3:]) if len(words) >= 3 else ' '.join(words)
+                else:
+                    last_words = preceding_text
+                candidate = normalize_text(last_words)
+                if candidate and len(candidate) >= 5:
+                    before_text = candidate
+
+            # Process text after marker
+            following_text = ''.join(text_after_sup).strip()
+            if len(following_text) >= 10:
+                words = following_text.split()
+                if len(words) >= 2:
+                    first_words = ' '.join(words[:3]) if len(words) >= 3 else ' '.join(words)
+                else:
+                    first_words = following_text[:50]
+                candidate = normalize_text(first_words)
+                if candidate and len(candidate) >= 5:
+                    after_text = candidate
 
             occurrences.append({
                 'before': before_text,
