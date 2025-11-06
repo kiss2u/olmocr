@@ -15,7 +15,7 @@ We have run the benchmark against some contemporary OCR pipelines, but it is rea
 to run it against your own OCR tools. Your tool just needs to support Markdown or plain text output.
 
 <div align="center">
-  <img src="https://github.com/allenai/olmocr/blob/main/scripts/plots/pareto/ocr_pareto.png?raw=true" width=800/>
+  <img src="https://github.com/allenai/olmocr/blob/main/scripts/plots/ocr_pareto.png?raw=true" width=800/>
 </div>
 
 ## Results
