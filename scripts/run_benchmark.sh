@@ -203,7 +203,7 @@ if has_hf_token:
     commands.append('export HF_TOKEN="$HF_TOKEN"')
 
 # Build huggingface-cli download command
-hf_download_cmd = f"huggingface-cli download --repo-type dataset {bench_repo}"
+hf_download_cmd = f"hf download --repo-type dataset {bench_repo} --max-workers 2"
 if bench_branch:
     hf_download_cmd += f" --revision {bench_branch}"
 hf_download_cmd += " --local-dir ./olmOCR-bench"
