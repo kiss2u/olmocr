@@ -1007,7 +1007,7 @@ def main():
         eval_steps=50,
         warmup_steps=args.warmup_steps,
         max_prompt_length=3000,
-        max_completion_length=3000,
+        max_completion_length=8000,
         temperature=0.7,
         report_to=report_to,
         remove_unused_columns=False,
