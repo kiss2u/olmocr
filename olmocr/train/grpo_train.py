@@ -1,5 +1,5 @@
 """
-GRPO (Generative Reward-based Policy Optimization) training script for OlmOCR.
+GRPO (Group Relative Policy Optimization) training script for OlmOCR.
 """
 
 import argparse
