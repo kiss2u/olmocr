@@ -5,6 +5,7 @@ import glob
 import importlib
 import os
 import tempfile
+import traceback
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 
@@ -55,7 +56,7 @@ async def run_sync_in_executor(func, executor, *args, **kwargs):
     return await loop.run_in_executor(executor, partial(func, *args, **kwargs))
 
 
-async def process_pdf(pdf_path, page_num, method, kwargs, output_path, is_async, executor=None, use_executor=True):
+async def process_pdf(pdf_path, page_num, method, kwargs, output_path, is_async, executor=None, use_executor=True, failfast=False):
     """Process a single PDF and save the result to output_path"""
     try:
         if is_async:
@@ -81,14 +82,25 @@ async def process_pdf(pdf_path, page_num, method, kwargs, output_path, is_async,
 
         return True
     except Exception as ex:
-        print(f"Exception {str(ex)} occurred while processing {os.path.basename(output_path)}")
-        # Write blank to this file, so that it's marked as an error and not just skipped in evals
-        with open(output_path, "w") as out_f:
-            out_f.write("")
-        return False
+        if failfast:
+            print(f"\n{'=' * 60}")
+            print(f"FATAL ERROR: Exception occurred while processing {os.path.basename(output_path)}")
+            print(f"PDF: {pdf_path}, Page: {page_num}")
+            print(f"{'=' * 60}")
+            print("\nFull stack trace:")
+            traceback.print_exc()
+            print(f"{'=' * 60}\n")
+            # Re-raise the exception to stop processing
+            raise
+        else:
+            print(f"Exception {str(ex)} occurred while processing {os.path.basename(output_path)}")
+            # Write blank to this file, so that it's marked as an error and not just skipped in evals
+            with open(output_path, "w") as out_f:
+                out_f.write("")
+            return False
 
 
-async def process_pdfs(config, pdf_directory, data_directory, repeats, remove_text, force, max_parallel=None):
+async def process_pdfs(config, pdf_directory, data_directory, repeats, remove_text, force, max_parallel=None, failfast=False):
     """
     Process PDFs using asyncio for both sync and async methods,
     limiting the number of concurrent tasks to max_parallel.
@@ -173,7 +185,7 @@ async def process_pdfs(config, pdf_directory, data_directory, repeats, remove_te
                             print("Rerun with --force flag to force regeneration")
                             continue
 
-                        task = process_pdf(pdf_path, page_num, method, kwargs, output_path, is_async, executor, use_executor)
+                        task = process_pdf(pdf_path, page_num, method, kwargs, output_path, is_async, executor, use_executor, failfast)
                         tasks.append(task)
                         task_descriptions[id(task)] = f"{base_name}_pg{page_num}_repeat{repeat} ({candidate})"
 
@@ -246,6 +258,12 @@ if __name__ == "__main__":
         action="store_true",
         help="When your PDF gets processed, we will take a screenshot of it first, to erase any text content in it. This would disable document-anchoring for olmocr.",
     )
+    parser.add_argument(
+        "--failfast",
+        action="store_true",
+        default=False,
+        help="Fail immediately and print full stack trace if any page generation throws an exception",
+    )
     args = parser.parse_args()
 
     # Mapping of method names to a tuple: (module path, function name)
@@ -282,5 +300,5 @@ if __name__ == "__main__":
     data_directory = args.dir
     pdf_directory = os.path.join(data_directory, "pdfs")
 
-    # Run the async process function with the parallel argument
-    asyncio.run(process_pdfs(config, pdf_directory, data_directory, args.repeats, args.remove_text, args.force, args.parallel))
+    # Run the async process function with the parallel and failfast arguments
+    asyncio.run(process_pdfs(config, pdf_directory, data_directory, args.repeats, args.remove_text, args.force, args.parallel, args.failfast))

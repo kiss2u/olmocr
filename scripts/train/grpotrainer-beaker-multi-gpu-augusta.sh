@@ -169,7 +169,7 @@ setup_commands = [
     "pip install trl wandb",
     "pip install transformers==4.55.2",  # Updated for GRPO compatibility
     "pip install flash-attn==2.8.0.post2 --no-build-isolation",
-    "pip install vllm==v0.10.1.1",
+    "pip install vllm==0.11.0",
     "pip install s5cmd",
     "pip install accelerate deepspeed",
     
