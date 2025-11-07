@@ -22,8 +22,8 @@ from rapidfuzz import distance, fuzz
 from torch.utils.data import Dataset
 from transformers import (
     AutoProcessor,
+    Qwen3VLForConditionalGeneration,
     Qwen2_5_VLForConditionalGeneration,
-    Qwen2VLForConditionalGeneration,
 )
 from trl import GRPOConfig, GRPOTrainer
 
@@ -892,8 +892,8 @@ def main():
 
     # Load model
     logger.info(f"Loading model: {args.model_name}")
-    if "Qwen2-VL" in args.model_name:
-        model_class = Qwen2VLForConditionalGeneration
+    if "qwen3" in args.model_name.lower():
+        model_class = Qwen3VLForConditionalGeneration
     else:
         model_class = Qwen2_5_VLForConditionalGeneration
 
