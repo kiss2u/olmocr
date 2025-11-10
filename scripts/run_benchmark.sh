@@ -228,7 +228,7 @@ if bench_path:
     # If bench_path is provided, use it (can be S3 or local path)
     if bench_path.startswith("s3://"):
         # S3 path - use s5cmd to download
-        commands.append(f"s5cmd cp --no-sign-request {bench_path} ./olmOCR-bench/")
+        commands.append(f"s5cmd cp {bench_path}/* ./olmOCR-bench/")
     else:
         # Local path - copy directly
         commands.append(f"cp -r {bench_path} ./olmOCR-bench")
