@@ -45,9 +45,12 @@ while [[ $# -gt 0 ]]; do
             echo "All other arguments are forwarded to python -m olmocr.train.grpo_train"
             echo "Run 'python -m olmocr.train.grpo_train --help' to see available training options"
             echo ""
-            echo "This multi-GPU version runs:"
+            echo "This Augusta multi-GPU version runs:"
             echo "  - VLLM server on the last GPU"
             echo "  - Training on all other GPUs with DeepSpeed"
+            echo "  - Outputs saved locally then synced to S3"
+            echo ""
+            echo "Note: This version is configured for ai2/augusta cluster (no Weka)"
             exit 0
             ;;
         *)
@@ -111,7 +114,7 @@ cat << 'EOF' > /tmp/run_grpo_experiment_multi_gpu.py
 import sys
 import shlex
 import os
-from beaker import Beaker, ExperimentSpec, TaskSpec, TaskContext, ResultSpec, TaskResources, ImageSource, Priority, Constraints, EnvVar, DataMount
+from beaker import Beaker, ExperimentSpec, TaskSpec, TaskContext, ResultSpec, TaskResources, ImageSource, Priority, Constraints, EnvVar
 
 # Get parameters from command line
 image_tag = sys.argv[1]
@@ -163,10 +166,10 @@ for i in range(len(modified_args)):
 setup_commands = [
     # Install dependencies
     "pip install .[train]",
-    "pip install trl==0.23.0 wandb",
-    "pip install transformers==4.55.2",  # Updated for GRPO compatibility
-    "pip install flash-attn==2.8.0.post2 --no-build-isolation",
-    "pip install vllm==v0.10.1.1",
+    "pip install trl wandb",
+    "pip install transformers==4.57.1",  # Updated for GRPO compatibility
+    "pip install flash-attn --no-build-isolation",
+    "pip install vllm==0.11.0",
     "pip install s5cmd",
     "pip install accelerate deepspeed",
     
@@ -203,29 +206,50 @@ for i, arg in enumerate(modified_args):
         break
 
 # Build the GRPO training command with forwarded arguments
-# Force --vllm_mode server
 grpo_cmd = f"CUDA_VISIBLE_DEVICES={training_gpu_str} accelerate launch --use_deepspeed --zero_stage 2 --num_processes {num_training_processes} --gradient_accumulation_steps {grad_acc_steps} -m olmocr.train.grpo_train"
 
-# Add --vllm_mode server if not already in arguments
+# Check if --vllm_mode is specified in arguments
 arg_str = " ".join(modified_args)
-if "--vllm_mode" not in arg_str:
-    grpo_cmd += " --vllm_mode server"
+vllm_mode = "server"  # Default for multi-GPU
+for i, arg in enumerate(modified_args):
+    if arg == "--vllm_mode" and i + 1 < len(modified_args):
+        vllm_mode = modified_args[i + 1]
+        break
+
+# Always add --vllm_mode (since we filter it out later)
+grpo_cmd += f" --vllm_mode {vllm_mode}"
 
 # Check if certain required arguments are in the provided args, add defaults if not
 if "--train_bench_data_folder" not in arg_str:
     grpo_cmd += " --train_bench_data_folder /data/olmOCR-bench/bench_data"
 if "--eval_bench_data_folder" not in arg_str:
     grpo_cmd += " --eval_bench_data_folder /data/olmOCR-bench/bench_data"
+# Store output folder name for S3 sync
 if "--output_dir" not in arg_str:
-    output_dir = "/weka/oe-training-default/jakep/olmocr-grpo-checkpoints"
-    # Build subdirectory based on exp_name and BEAKER_WORKLOAD_ID
-    beaker_workload_id = "${BEAKER_WORKLOAD_ID}"
+    # Use local directory for output
+    # Note: We'll use the actual BEAKER_WORKLOAD_ID environment variable at runtime
     if exp_name:
         # For multi-GPU runs, add suffix to distinguish
-        output_dir = f"{output_dir}/{exp_name}-multigpu-{beaker_workload_id}"
+        output_folder_name = f"{exp_name}-multigpu-$BEAKER_WORKLOAD_ID"
     else:
-        output_dir = f"{output_dir}/multigpu-{beaker_workload_id}"
-    grpo_cmd += f" --output_dir {output_dir}"
+        output_folder_name = f"multigpu-$BEAKER_WORKLOAD_ID"
+    
+    # Local output directory (with placeholder for runtime expansion)
+    local_output_dir = f"/tmp/checkpoints/{output_folder_name}"
+    grpo_cmd += f" --output_dir {local_output_dir}"
+    
+    # S3 destination (with placeholder for runtime expansion)
+    s3_output_path = f"s3://ai2-oe-data/jakep/olmocr-grpo-checkpoints/{output_folder_name}"
+else:
+    # Extract output dir from args to determine S3 sync path
+    local_output_dir = None
+    s3_output_path = None
+    for i, arg in enumerate(modified_args):
+        if arg == "--output_dir" and i + 1 < len(modified_args):
+            local_output_dir = modified_args[i + 1]
+            output_folder_name = os.path.basename(local_output_dir)
+            s3_output_path = f"s3://ai2-oe-data/jakep/olmocr-grpo-checkpoints/{output_folder_name}"
+            break
 
 # Add all the (possibly modified) arguments, filtering out --vllm_mode if it exists to avoid duplicates
 # Note: We keep --gradient_accumulation_steps in the args even though we use it for accelerate,
@@ -243,16 +267,72 @@ for i, arg in enumerate(modified_args):
 
 grpo_cmd += " " + " ".join(filtered_args)
 
-# Create a bash script as a single command string
+# Create a bash script as a single command string with S3 sync
+# S3 sync will be handled directly in the cleanup function
+
 bash_script = f"""
 set -e
+
+# Ensure BEAKER_WORKLOAD_ID is available (Beaker sets this automatically)
+if [ -z "$BEAKER_WORKLOAD_ID" ]; then
+    echo "Warning: BEAKER_WORKLOAD_ID not set, using timestamp as fallback"
+    export BEAKER_WORKLOAD_ID=$(date +%Y%m%d-%H%M%S)
+fi
+echo "BEAKER_WORKLOAD_ID: $BEAKER_WORKLOAD_ID"
+
+# Define cleanup function that will always run
+cleanup() {{
+    EXIT_CODE=$?
+    echo "Running cleanup (exit code: $EXIT_CODE)..."
+    
+    # Kill VLLM server if it's still running
+    if [ ! -z "$VLLM_PID" ]; then
+        echo "Killing VLLM server (PID: $VLLM_PID)..."
+        kill $VLLM_PID || true
+        echo "VLLM server stopped."
+    fi
+    
+    # Always sync to S3 if output directory exists
+    echo "Checking for outputs to sync to S3..."
+    # Expand BEAKER_WORKLOAD_ID at runtime
+    ACTUAL_OUTPUT_DIR="{local_output_dir.replace('$BEAKER_WORKLOAD_ID', '${BEAKER_WORKLOAD_ID}') if local_output_dir else '/tmp/checkpoints'}"
+    if [ -d "$ACTUAL_OUTPUT_DIR" ]; then
+        echo "Output directory exists at $ACTUAL_OUTPUT_DIR"
+        # List contents for verification
+        echo "Directory contents:"
+        ls -la "$ACTUAL_OUTPUT_DIR" | head -20
+        
+        {f'ACTUAL_S3_PATH="{s3_output_path.replace("$BEAKER_WORKLOAD_ID", "${BEAKER_WORKLOAD_ID}")}"' if s3_output_path else ''}
+        {f'echo "Syncing from $ACTUAL_OUTPUT_DIR to $ACTUAL_S3_PATH"' if s3_output_path else ''}
+        {f's5cmd sync "$ACTUAL_OUTPUT_DIR/" "$ACTUAL_S3_PATH/"' if s3_output_path else 'echo "No S3 sync configured"'}
+        {f'echo "S3 sync completed"' if s3_output_path else ''}
+    else
+        echo "No output directory found at $ACTUAL_OUTPUT_DIR, skipping S3 sync"
+    fi
+    
+    if [ $EXIT_CODE -eq 0 ]; then
+        echo "Script completed successfully"
+    else
+        echo "Script failed with exit code: $EXIT_CODE"
+    fi
+    
+    exit $EXIT_CODE
+}}
+
+# Set trap to run cleanup on EXIT (covers both success and failure)
+trap cleanup EXIT
 
 # Setup commands
 {" && ".join(setup_commands)}
 
+# Create output directory (with runtime variable expansion)
+ACTUAL_OUTPUT_DIR="{local_output_dir.replace('$BEAKER_WORKLOAD_ID', '${BEAKER_WORKLOAD_ID}') if local_output_dir else '/tmp/checkpoints'}"
+echo "Creating output directory: $ACTUAL_OUTPUT_DIR"
+mkdir -p "$ACTUAL_OUTPUT_DIR"
+
 # Start VLLM server in background (output goes to console)
 echo 'Starting VLLM server on GPU {vllm_gpu} as background process...'
-CUDA_VISIBLE_DEVICES={vllm_gpu} trl vllm-serve --model {vllm_model_arg} --port 8000 --gpu-memory-utilization 0.5 &
+CUDA_VISIBLE_DEVICES={vllm_gpu} trl vllm-serve --model {vllm_model_arg} --port 8000 --gpu-memory-utilization 0.5 --max-model-len 16384 &
 VLLM_PID=$!
 echo "VLLM server started with PID: $VLLM_PID"
 
@@ -269,14 +349,16 @@ for i in {{1..60}}; do
     fi
 done
 
-# Run training
+# Run training (expand BEAKER_WORKLOAD_ID in the command)
 echo 'Starting GRPO training on GPUs {training_gpu_str}...'
-{grpo_cmd}
+echo 'BEAKER_WORKLOAD_ID: '$BEAKER_WORKLOAD_ID
+# Replace placeholder with actual workload ID in the command
+GRPO_CMD="{grpo_cmd}"
+GRPO_CMD="${{GRPO_CMD//\$BEAKER_WORKLOAD_ID/$BEAKER_WORKLOAD_ID}}"
+echo "Running command: $GRPO_CMD"
+eval "$GRPO_CMD"
 
-# Cleanup
-echo 'Training completed. Killing VLLM server...'
-kill $VLLM_PID || true
-echo 'VLLM server stopped.'
+echo 'Training completed successfully!'
 """
 
 # Create single task spec
@@ -288,14 +370,14 @@ task_spec = TaskSpec(
         bash_script
     ],
     context=TaskContext(
-        priority=Priority.normal,
+        priority=Priority.high,
         preemptible=preemptible,
     ),
     resources=TaskResources(
         gpu_count=num_gpus,  # Request the specified number of GPUs
         shared_memory="10GiB"
     ),
-    constraints=Constraints(cluster=["ai2/jupiter", "ai2/saturn"]),
+    constraints=Constraints(cluster=["ai2/jupiter"]),
     result=ResultSpec(path="/noop-results"),
     env_vars=[
         EnvVar(name="LOG_FILTER_TYPE", value="local_rank0_only"),
@@ -304,10 +386,6 @@ task_spec = TaskSpec(
         EnvVar(name="AWS_ACCESS_KEY_ID", secret="ALLENNLP_AWS_ACCESS_KEY_ID"),
         EnvVar(name="AWS_SECRET_ACCESS_KEY", secret="ALLENNLP_AWS_SECRET_ACCESS_KEY"),
         EnvVar(name="WANDB_API_KEY", secret="JAKE_WANDB_API_KEY"),
-    ],
-    datasets=[
-        DataMount.new(mount_path="/weka/oe-data-default", weka="oe-data-default"),
-        DataMount.new(mount_path="/weka/oe-training-default", weka="oe-training-default"),
     ]
 )
 
