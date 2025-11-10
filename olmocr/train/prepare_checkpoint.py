@@ -119,7 +119,19 @@ def load_json_if_exists(path: str) -> Optional[dict]:
             return None
         raise
     except OSError as exc:
-        if "No such file" in str(exc):
+        # Handle S3 NoSuchKey errors that come through as OSError
+        exc_str = str(exc)
+        if "No such file" in exc_str:
+            return None
+        if "NoSuchKey" in exc_str:
+            return None
+        if "The specified key does not exist" in exc_str:
+            return None
+        raise
+    except Exception as exc:
+        # Catch any other S3-related errors for missing files
+        exc_str = str(exc)
+        if "NoSuchKey" in exc_str or "specified key does not exist" in exc_str.lower():
             return None
         raise
 
