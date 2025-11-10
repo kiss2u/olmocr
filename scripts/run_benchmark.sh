@@ -17,6 +17,8 @@
 #   ./scripts/run_benchmark.sh --benchrepo allenai/olmOCR-bench-internal
 #  With benchbranch parameter: use a specific branch/revision of the benchmark dataset
 #   ./scripts/run_benchmark.sh --benchbranch olmOCR-bench-1125
+#  With benchpath parameter: use benchmark dataset from a local path or S3 path (mutually exclusive with benchrepo/benchbranch)
+#   ./scripts/run_benchmark.sh --benchpath s3://ai2-oe-data/jakep/olmocr/olmOCR-bench-1125/
 
 set -e
 
@@ -25,6 +27,7 @@ MODEL=""
 CLUSTER=""
 BENCH_BRANCH=""
 BENCH_REPO=""
+BENCH_PATH=""
 BEAKER_IMAGE=""
 REPEATS="1"
 NOPERF=""
@@ -46,6 +49,10 @@ while [[ $# -gt 0 ]]; do
             BENCH_REPO="$2"
             shift 2
             ;;
+        --benchpath)
+            BENCH_PATH="$2"
+            shift 2
+            ;;
         --beaker-image)
             BEAKER_IMAGE="$2"
             shift 2
@@ -60,11 +67,18 @@ while [[ $# -gt 0 ]]; do
             ;;
         *)
             echo "Unknown option: $1"
-            echo "Usage: $0 [--model MODEL_NAME] [--cluster CLUSTER_NAME] [--benchbranch BRANCH_NAME] [--benchrepo REPO_URL] [--beaker-image IMAGE_NAME] [--repeats NUMBER] [--noperf]"
+            echo "Usage: $0 [--model MODEL_NAME] [--cluster CLUSTER_NAME] [--benchbranch BRANCH_NAME] [--benchrepo REPO_URL] [--benchpath PATH] [--beaker-image IMAGE_NAME] [--repeats NUMBER] [--noperf]"
             exit 1
             ;;
     esac
 done
+
+# Check for mutual exclusivity between benchpath and benchrepo/benchbranch
+if [ -n "$BENCH_PATH" ] && ([ -n "$BENCH_REPO" ] || [ -n "$BENCH_BRANCH" ]); then
+    echo "Error: --benchpath is mutually exclusive with --benchrepo and --benchbranch"
+    echo "Use either --benchpath OR --benchrepo/--benchbranch, not both."
+    exit 1
+fi
 
 # Check for uncommitted changes
 if [ -n "$BEAKER_IMAGE" ]; then
@@ -139,6 +153,7 @@ model = None
 cluster = None
 bench_branch = None
 bench_repo = "allenai/olmOCR-bench"  # Default repository
+bench_path = None
 repeats = 1
 noperf = False
 
@@ -153,6 +168,9 @@ while arg_idx < len(sys.argv):
         arg_idx += 2
     elif sys.argv[arg_idx] == "--benchrepo":
         bench_repo = sys.argv[arg_idx + 1]
+        arg_idx += 2
+    elif sys.argv[arg_idx] == "--benchpath":
+        bench_path = sys.argv[arg_idx + 1]
         arg_idx += 2
     elif sys.argv[arg_idx] == "--repeats":
         repeats = int(sys.argv[arg_idx + 1])
@@ -202,13 +220,25 @@ if has_aws_creds:
 if has_hf_token:
     commands.append('export HF_TOKEN="$HF_TOKEN"')
 
-# Build huggingface-cli download command
-hf_download_cmd = f"hf download --repo-type dataset {bench_repo} --max-workers 2"
-if bench_branch:
-    hf_download_cmd += f" --revision {bench_branch}"
-hf_download_cmd += " --local-dir ./olmOCR-bench"
+# Install s5cmd (needed for S3 operations)
+commands.append("pip install s5cmd")
 
-commands.append(hf_download_cmd)
+# Handle benchmark data download based on source type
+if bench_path:
+    # If bench_path is provided, use it (can be S3 or local path)
+    if bench_path.startswith("s3://"):
+        # S3 path - use s5cmd to download
+        commands.append(f"s5cmd cp --no-sign-request {bench_path} ./olmOCR-bench/")
+    else:
+        # Local path - copy directly
+        commands.append(f"cp -r {bench_path} ./olmOCR-bench")
+else:
+    # Use HuggingFace download (default behavior)
+    hf_download_cmd = f"hf download --repo-type dataset {bench_repo} --max-workers 2"
+    if bench_branch:
+        hf_download_cmd += f" --revision {bench_branch}"
+    hf_download_cmd += " --local-dir ./olmOCR-bench"
+    commands.append(hf_download_cmd)
 
 # Run pipeline multiple times based on repeats
 for i in range(1, repeats + 1):
@@ -223,11 +253,6 @@ for i in range(1, repeats + 1):
     workspace_dir = f"localworkspace{i}/"
     workspace_to_bench_cmd = f"python olmocr/bench/scripts/workspace_to_bench.py {workspace_dir} olmOCR-bench/bench_data/olmocr --bench-path ./olmOCR-bench/ --repeat-index {i}"
     commands.append(workspace_to_bench_cmd)
-
-# Copy all workspaces to S3 and run benchmark
-commands.extend([
-    "pip install s5cmd",
-])
 
 # Copy each workspace to S3
 for i in range(1, repeats + 1):
@@ -364,6 +389,11 @@ fi
 if [ -n "$BENCH_REPO" ]; then
     echo "Using bench repo: $BENCH_REPO"
     CMD="$CMD --benchrepo $BENCH_REPO"
+fi
+
+if [ -n "$BENCH_PATH" ]; then
+    echo "Using bench path: $BENCH_PATH"
+    CMD="$CMD --benchpath $BENCH_PATH"
 fi
 
 if [ "$REPEATS" != "1" ]; then
