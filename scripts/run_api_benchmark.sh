@@ -260,7 +260,7 @@ else:
 convert_cmd = "python -m olmocr.bench.convert"
 if convert_args:
     convert_cmd += " " + " ".join(convert_args)
-convert_cmd += " --dir ./olmOCR-bench/bench_data"
+convert_cmd += " --dir ./olmOCR-bench/bench_data --failfast"
 commands.append(convert_cmd)
 
 # Run benchmark
