@@ -285,7 +285,7 @@ task_spec_args = {
         preemptible=True,
     ),
     "resources": TaskResources(gpu_count=0),
-    "constraints": Constraints(cluster=[cluster] if cluster else ["ai2/phobos"),
+    "constraints": Constraints(cluster=[cluster] if cluster else ["ai2/phobos"]),
     "result": ResultSpec(path="/noop-results"),
 }
 
