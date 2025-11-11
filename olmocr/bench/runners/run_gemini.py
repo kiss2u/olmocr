@@ -9,6 +9,20 @@ from google.genai import types
 from olmocr.bench.prompts import (
     build_openai_silver_data_prompt_no_document_anchoring,
 )
+from olmocr.data.renderpdf import (
+    get_png_dimensions_from_base64,
+    render_pdf_to_base64png,
+)
+from olmocr.prompts.anchor import get_anchor_text
+from olmocr.prompts.prompts import (
+    PageResponse,
+    build_finetuning_prompt,
+    build_openai_silver_data_prompt,
+    build_openai_silver_data_prompt_v2,
+    build_openai_silver_data_prompt_v2_simple,
+    build_openai_silver_data_prompt_v3_simple,
+    openai_response_format_schema,
+)
 from olmocr.data.renderpdf import render_pdf_to_base64png
 from olmocr.prompts.anchor import get_anchor_text
 from olmocr.prompts.prompts import build_openai_silver_data_prompt
@@ -20,7 +34,7 @@ def run_gemini(
     model: str = "gemini-2.0-flash",
     temperature: float = 0.1,
     target_longest_image_dim: int = 2048,
-    prompt_template: Literal["full", "full_no_document_anchoring", "basic", "finetune"] = "finetune",
+    prompt_template: Literal["full", "full_no_document_anchoring", "basic", "finetune", "fullv3simple"] = "finetune",
     response_template: Literal["plain", "json"] = "json",
 ) -> str:
     """
@@ -50,6 +64,10 @@ def run_gemini(
         text_part = types.Part(text=f"""{build_openai_silver_data_prompt(anchor_text)}""")
     elif prompt_template == "full_no_document_anchoring":
         text_part = types.Part(text=f"""{build_openai_silver_data_prompt_no_document_anchoring(anchor_text)}""")
+    elif prompt_template == "fullv3simple":
+        width, height = get_png_dimensions_from_base64(image_base64)
+        prompt = build_openai_silver_data_prompt_v3_simple(width, height)
+        text_part = types.Part(text=prompt)
     else:
         raise NotImplementedError()
 
@@ -58,7 +76,7 @@ def run_gemini(
             temperature=temperature,
             top_p=1.0,
             top_k=32,
-            max_output_tokens=4096,
+            max_output_tokens=10000,
             response_mime_type="application/json",
             response_schema=genai.types.Schema(
                 type=genai.types.Type.OBJECT,
