@@ -6,6 +6,9 @@
 #  With API provider arguments (forwarded to olmocr.bench.convert):
 #   ./scripts/run_api_benchmark.sh chatgpt:name=test1:prompt=long
 #   ./scripts/run_api_benchmark.sh gemini:name=test2:api_key=YOUR_KEY
+#  With beaker secrets for API keys (format: ENV_VAR=secret-name):
+#   ./scripts/run_api_benchmark.sh --beaker-secret OPENAI_API_KEY=jakep-openai-key chatgpt:name=test1:prompt=long
+#   ./scripts/run_api_benchmark.sh --beaker-secret GEMINI_API_KEY=jakep-gemini-key --beaker-secret ANTHROPIC_API_KEY=jakep-anthropic-key chatgpt:name=test1
 #  With cluster parameter: specify a specific cluster to use
 #   ./scripts/run_api_benchmark.sh --cluster ai2/titan-cirrascale chatgpt:name=test1:prompt=long
 #  With beaker image: skip Docker build and use provided Beaker image
@@ -26,6 +29,7 @@ BENCH_BRANCH=""
 BENCH_REPO=""
 BENCH_PATH=""
 BEAKER_IMAGE=""
+BEAKER_SECRETS=()
 CONVERT_ARGS=()
 
 # First pass: extract our known arguments
@@ -49,6 +53,11 @@ while [[ $# -gt 0 ]]; do
             ;;
         --beaker-image)
             BEAKER_IMAGE="$2"
+            shift 2
+            ;;
+        --beaker-secret)
+            # Format: ENV_VAR=secret-name
+            BEAKER_SECRETS+=("$2")
             shift 2
             ;;
         *)
@@ -153,6 +162,7 @@ bench_branch = None
 bench_repo = "allenai/olmOCR-bench"  # Default repository
 bench_path = None
 convert_args = []
+beaker_secrets = {}  # Dict of ENV_VAR: secret_name
 
 # Parse remaining arguments
 arg_idx = 5
@@ -168,6 +178,13 @@ while arg_idx < len(sys.argv):
         arg_idx += 2
     elif sys.argv[arg_idx] == "--benchpath":
         bench_path = sys.argv[arg_idx + 1]
+        arg_idx += 2
+    elif sys.argv[arg_idx] == "--beaker-secret":
+        # Parse ENV_VAR=secret-name format
+        secret_spec = sys.argv[arg_idx + 1]
+        if "=" in secret_spec:
+            env_var, secret_name = secret_spec.split("=", 1)
+            beaker_secrets[env_var] = secret_name
         arg_idx += 2
     else:
         # Everything else is a convert arg
@@ -214,6 +231,10 @@ if has_aws_creds:
 
 if has_hf_token:
     commands.append('export HF_TOKEN="$HF_TOKEN"')
+
+# Export any beaker secrets as environment variables
+for env_var in beaker_secrets:
+    commands.append(f'export {env_var}="${env_var}"')
 
 # Install s5cmd (needed for S3 operations)
 commands.append("pip install s5cmd")
@@ -274,6 +295,9 @@ if has_aws_creds:
     env_vars.append(EnvVar(name="AWS_CREDENTIALS_FILE", secret=aws_creds_secret))
 if has_hf_token:
     env_vars.append(EnvVar(name="HF_TOKEN", secret=hf_token_secret))
+# Add any additional beaker secrets
+for env_var, secret_name in beaker_secrets.items():
+    env_vars.append(EnvVar(name=env_var, secret=secret_name))
 if env_vars:
     task_spec_args["env_vars"] = env_vars
 
@@ -314,6 +338,15 @@ fi
 if [ -n "$BENCH_PATH" ]; then
     echo "Using bench path: $BENCH_PATH"
     CMD="$CMD --benchpath $BENCH_PATH"
+fi
+
+# Add beaker secrets if any
+if [ ${#BEAKER_SECRETS[@]} -gt 0 ]; then
+    echo "Using beaker secrets:"
+    for secret in "${BEAKER_SECRETS[@]}"; do
+        echo "  $secret"
+        CMD="$CMD --beaker-secret \"$secret\""
+    done
 fi
 
 # Add convert args if any
