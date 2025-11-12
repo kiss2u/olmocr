@@ -263,6 +263,9 @@ if convert_args:
 convert_cmd += " --dir ./olmOCR-bench/bench_data"
 commands.append(convert_cmd)
 
+# Copy workspace to S3 for archival (using BEAKER_WORKLOAD_ID for unique path)
+commands.append("s5cmd cp ./olmOCR-bench/ s3://ai2-oe-data/jakep/olmocr-bench-runs/$BEAKER_WORKLOAD_ID/olmOCR-bench/")
+
 # Run benchmark
 commands.append("python -m olmocr.bench.benchmark --dir ./olmOCR-bench/bench_data")
 
