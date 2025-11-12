@@ -260,7 +260,7 @@ else:
 convert_cmd = "python -m olmocr.bench.convert"
 if convert_args:
     convert_cmd += " " + " ".join(convert_args)
-convert_cmd += " --dir ./olmOCR-bench/bench_data --failfast"
+convert_cmd += " --dir ./olmOCR-bench/bench_data"
 commands.append(convert_cmd)
 
 # Run benchmark
@@ -301,16 +301,44 @@ for env_var, secret_name in beaker_secrets.items():
 if env_vars:
     task_spec_args["env_vars"] = env_vars
 
+# Create a readable name from convert args
+# Extract key info like provider name and important parameters
+experiment_name_parts = []
+for arg in convert_args:
+    # Parse provider:param=value format
+    if ":" in arg:
+        parts = arg.split(":")
+        provider = parts[0]
+        experiment_name_parts.append(provider)
+        # Look for name parameter specifically
+        for part in parts[1:]:
+            if part.startswith("name="):
+                name_value = part.replace("name=", "")
+                experiment_name_parts.append(name_value)
+                break
+    else:
+        # Simple argument without colons
+        experiment_name_parts.append(arg)
+
+# Create experiment name with convert args info
+if experiment_name_parts:
+    experiment_name = "api-bench-" + "-".join(experiment_name_parts[:3])  # Limit to first 3 parts to avoid overly long names
+else:
+    experiment_name = "api-benchmark"
+
+print(f"Experiment name: {experiment_name}")
+
 # Create experiment spec
 experiment_spec = ExperimentSpec(
-    description=f"OlmOCR API Benchmark Run - Branch: {git_branch}, Commit: {git_hash}",
+    description=f"OlmOCR API Benchmark Run - Branch: {git_branch}, Commit: {git_hash} - Args: {' '.join(convert_args)}",
     budget="ai2/oe-base",
     tasks=[TaskSpec(**task_spec_args)],
+    name=experiment_name,
 )
 
 # Create the experiment
 experiment = b.experiment.create(spec=experiment_spec, workspace="ai2/olmocr")
-print(f"Created API benchmark experiment: {experiment.id}")
+print(f"Created API benchmark experiment: {experiment_name} ({experiment.id})")
 print(f"View at: https://beaker.org/ex/{experiment.id}")
 EOF
 
