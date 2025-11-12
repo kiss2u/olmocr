@@ -2,7 +2,7 @@
 
 # Project metadata
 project_name: olmocr-qwen-vl-training
-run_name: qwen2.5-vl-7b-olmocrv4_1epoch_promptv4_mix1025_more_rotation_filtered
+run_name: qwen2.5-vl-7b-olmocrv4_1epoch_promptv4_mix1025_more_rotation_filtered_rotation10p
 
 # Model configuration
 model:
