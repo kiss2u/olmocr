@@ -16,7 +16,7 @@
 #  With beaker image: skip Docker build and use provided Beaker image
 #   ./scripts/run_server_benchmark.sh --beaker-image jakep/olmocr-benchmark-0.3.3-780bc7d934 --model gpt2
 #  With additional server convert arguments:
-#   ./scripts/run_server_benchmark.sh --model gpt2 server:name=test1:endpoint=http://localhost:8000/v1
+#   ./scripts/run_server_benchmark.sh --model gpt2 server:name=test1
 
 set -e
 
@@ -261,7 +261,7 @@ curl -s http://localhost:8000/v1/models | python -m json.tool || true
 
 # Run the convert command
 echo "Running convert with server endpoint..."
-python -m olmocr.bench.convert server:endpoint=http://localhost:8000/v1:model={served_model_name} {"" + " ".join(convert_args) if convert_args else ""} --dir ./olmOCR-bench/bench_data
+python -m olmocr.bench.convert server:model={served_model_name} {"" + " ".join(convert_args) if convert_args else ""} --dir ./olmOCR-bench/bench_data
 
 # Kill vllm server
 echo "Stopping vllm server..."
