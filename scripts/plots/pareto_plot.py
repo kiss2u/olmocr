@@ -147,7 +147,8 @@ MODEL_DATA = [
     # Using cost per million pages from original olmocr paper
     #ModelData(name="Qwen 2 VL", cost_per_million=178, performance=61.3, category="Open VLM", label_offset=(-35, 10)),
     ModelData(name="Qwen 2.5 VL", cost_per_million=178, performance=64.5, category="Open VLM", label_offset=(-35, 10)),
-    ModelData(name="Qwen 3 VL 8B", cost_per_million=178, performance=61.4, category="Open VLM", label_offset=(-35, -20)),
+    # Using original olmocr cost, but scaling it by 3100/2100 which is the tokens/second rate difference that we see on H100 inference
+    ModelData(name="Qwen 3 VL 8B", cost_per_million=178 * (3100/2100), performance=61.4, category="Open VLM", label_offset=(-35, -20)),
 
     # Perf data from https://arxiv.org/pdf/2509.22186
     ModelData(name="Nanonets-OCR2-3B", cost_per_million=cost_per_million_by_page("a100", 0.55), performance=69.5, category="Open VLM", label_offset=(-85, 10)),
