@@ -92,9 +92,20 @@ mkdir -p "$TARGET_ROOT"
 echo "Installing Infinity Parser dependencies..."
 pip install PyMuPDF pdf2image qwen_vl_utils
 
-# Process all PDFs with Infinity Parser
+# Process each folder separately to maintain structure
 echo "Running Infinity Parser conversions..."
-parser --model infly/Infinity-Parser-7B --input "$PDF_ROOT" --output ./infinitydata --batch_size 128 --tp 1
+for folder in "$PDF_ROOT"/*; do
+    if [ ! -d "$folder" ]; then
+        continue
+    fi
+    section=$(basename "$folder")
+    output_dir="$HOME/infinityparser_bench_${section}"
+    rm -rf "$output_dir"
+    mkdir -p "$output_dir"
+
+    echo "  Processing $folder -> $output_dir"
+    parser --model infly/Infinity-Parser-7B --input "$folder" --output "$output_dir" --batch_size 128 --tp 1
+done
 
 echo "Collecting Infinity Parser markdown outputs..."
 # For each PDF, find its corresponding markdown and copy to proper location
@@ -116,8 +127,8 @@ find "$PDF_ROOT" -type f -name "*.pdf" | while IFS= read -r pdf_path; do
     # Get PDF name without extension
     pdf_name=$(basename "$pdf_path" .pdf)
 
-    # Source markdown location: ./infinitydata/${pdf_name}/output.md
-    src_md="./infinitydata/${pdf_name}/output.md"
+    # Source markdown location: ~/infinityparser_bench_${section}/${pdf_name}/output.md
+    src_md="$HOME/infinityparser_bench_${section}/${pdf_name}/output.md"
 
     if [ ! -f "$src_md" ]; then
         echo "Warning: No markdown output found at $src_md" >&2
