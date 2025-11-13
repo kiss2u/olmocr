@@ -145,6 +145,8 @@ commands.extend([
     "git clone https://huggingface.co/datasets/allenai/olmOCR-bench",
     "cd olmOCR-bench && git lfs pull && cd ..",
     "git clone https://github.com/infly-ai/INF-MLLM.git",
+    # Patch the missing import in utils.py
+    "sed -i '1s/^/from pdf2image import convert_from_path\\n/' INF-MLLM/Infinity-Parser/inference/utils.py",
     "cd INF-MLLM/Infinity-Parser && pip install . && cd ../..",
     run_infinityparser_shell,
     "python -m olmocr.bench.benchmark --dir ./olmOCR-bench/bench_data --candidate infinityparser"
@@ -209,6 +211,8 @@ time parser --model infly/Infinity-Parser-7B --input /root/olmOCR-mix-0225_bench
 
 perf_commands.extend([
     "git clone https://github.com/infly-ai/INF-MLLM.git",
+    # Patch the missing import in utils.py
+    "sed -i '1s/^/from pdf2image import convert_from_path\\n/' INF-MLLM/Infinity-Parser/inference/utils.py",
     "cd INF-MLLM/Infinity-Parser && pip install . && cd ../..",
     "pip install awscli",
     "aws s3 cp --recursive s3://ai2-oe-data/jakep/olmocr/olmOCR-mix-0225/benchmark_set/ /root/olmOCR-mix-0225_benchmark_set/",
