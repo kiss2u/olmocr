@@ -145,13 +145,17 @@ MODEL_DATA = [
     # Perf data is hard to measure, using previously calculated value, using more generous number from v.1.7.5
     ModelData(name="Marker v1.10.1", cost_per_million=1492, performance=76.1, category="Open Source Tool", label_offset=(-25, 10)),
     # Using cost per million pages from original olmocr paper
-    ModelData(name="Qwen 2 VL", cost_per_million=178, performance=31.5, category="Open VLM", label_offset=(-35, 10)),
-    ModelData(name="Qwen 2.5 VL", cost_per_million=178, performance=65.5, category="Open VLM", label_offset=(-35, 10)),
+    #ModelData(name="Qwen 2 VL", cost_per_million=178, performance=61.3, category="Open VLM", label_offset=(-35, 10)),
+    ModelData(name="Qwen 2.5 VL", cost_per_million=178, performance=64.5, category="Open VLM", label_offset=(-35, 10)),
+    ModelData(name="Qwen 3 VL 8B", cost_per_million=178, performance=61.4, category="Open VLM", label_offset=(-35, -20)),
+
     # Perf data from https://arxiv.org/pdf/2509.22186
     ModelData(name="Nanonets-OCR2-3B", cost_per_million=cost_per_million_by_page("a100", 0.55), performance=69.5, category="Open VLM", label_offset=(-85, 10)),
+
     # Pricing from this tweet: https://x.com/VikParuchuri/status/1980725223616876704
     # You'd get better pricing running locally, but I couldn't get a number
     ModelData(name="Chandra OCR API", cost_per_million=4000, performance=83.1, category="Commercial VLM", label_offset=(-85, 10)),
+
     # Going off of 200k pages per day per A100
     ModelData(
         name="DeepSeek-OCR",
@@ -160,8 +164,10 @@ MODEL_DATA = [
         category="Open VLM",
         label_offset=(-20, 10),
     ),
+
     # Perf data from paper pg 18 https://arxiv.org/pdf/2510.14528
     ModelData(name="PaddleOCR-VL", cost_per_million=cost_per_million_by_page("a100", 1.2241), performance=80.0, category="Open VLM", label_offset=(-35, 10)),
+
     # Perf data is here: https://beaker.allen.ai/orgs/ai2/workspaces/olmocr/work/01K8V42ERGBHAZ2KKDBKXKZHPJ?taskId=01K8V42ERJ9S82C06CSWQT7RR6&jobId=01K8VH0Y9J47ZXMCCWG97J7P54
     ModelData(
         name="Ours", cost_per_million=cost_per_million_by_page("h100", 10000 / (36 * 60 + 47)), performance=82.3, category="Ours", label_offset=(-20, 10)
@@ -205,7 +211,7 @@ category_text_colors = {
 }
 
 # Create the plot
-plt.figure(figsize=(10, 6))
+plt.figure(figsize=(10, 8))
 
 # Plot each category
 categories = df[CATEGORY_COLUMN_NAME].unique()
@@ -237,7 +243,7 @@ for idx, row in df.iterrows():
     )
 
 # Set up axes
-plt.ylim(25, 85)  # Set y-axis limits from 25 to 85 to include Qwen2VL
+plt.ylim(55, 85)  # Set y-axis limits from 25 to 85 to include Qwen2VL
 plt.xlim(100, 15000)
 plt.xscale("log")  # Use log scale for cost
 plt.grid(True, which="both", ls=":", color=TEAL, alpha=0.2)
