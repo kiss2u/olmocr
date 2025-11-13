@@ -278,6 +278,7 @@ if __name__ == "__main__":
         "gemini": ("olmocr.bench.runners.run_gemini", "run_gemini"),
         "mistral": ("olmocr.bench.runners.run_mistral", "run_mistral"),
         "docling": ("olmocr.bench.runners.run_docling", "run_docling"),
+        "dotsocr": ("olmocr.bench.runners.run_dotsocr", "run_dotsocr"),
         "rolmocr": ("olmocr.bench.runners.run_rolmocr", "run_rolmocr"),
         "paddlepaddle": ("olmocr.bench.runners.run_paddlepaddle", "run_paddlepaddle"),
         "paddlevl": ("olmocr.bench.runners.run_paddlevl", "run_paddlevl"),
