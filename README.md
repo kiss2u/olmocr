@@ -263,7 +263,7 @@ python -m olmocr.pipeline ./localworkspace --server http://remote-server:8000/v1
 
 The served model name should be `olmocr`. An example vLLM launch command would be:
 ```bash
-vllm serve allenai/olmOCR-2-7B-1025-FP8 --served-model-name olmocr --max-model-len 16384
+vllm serve allenai/olmOCR-2-7B-1025-FP8 --max-model-len 16384
 ```
 
 #### Verified External Providers
