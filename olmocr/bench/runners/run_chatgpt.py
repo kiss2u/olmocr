@@ -23,6 +23,11 @@ from olmocr.prompts.prompts import (
     openai_response_format_schema,
 )
 
+# Global variables to track token usage and document count
+TOTAL_INPUT_TOKENS = 0
+TOTAL_OUTPUT_TOKENS = 0
+TOTAL_DOCUMENTS = 0
+
 
 def run_chatgpt(
     pdf_path: str,
@@ -45,6 +50,7 @@ def run_chatgpt(
     Returns:
         str: The OCR result in markdown format.
     """
+    global TOTAL_INPUT_TOKENS, TOTAL_OUTPUT_TOKENS, TOTAL_DOCUMENTS
     # Convert the first page of the PDF to a base64-encoded PNG image.
     image_base64 = render_pdf_to_base64png(pdf_path, page_num=page_num, target_longest_image_dim=target_longest_image_dim)
     anchor_text = get_anchor_text(pdf_path, page_num, pdf_engine="pdfreport")
@@ -91,6 +97,14 @@ def run_chatgpt(
         safety_identifier="olmocr-bench-runner",
     )
 
+    # Accumulate token counts from the response
+    if response.usage:
+        TOTAL_INPUT_TOKENS += response.usage.prompt_tokens
+        TOTAL_OUTPUT_TOKENS += response.usage.completion_tokens
+
+    # Increment document counter
+    TOTAL_DOCUMENTS += 1
+
     raw_response = response.choices[0].message.content
 
     assert len(response.choices) > 0
@@ -101,6 +115,10 @@ def run_chatgpt(
         data = json.loads(raw_response)
         data = PageResponse(**data)
 
+        # Print token counts before returning
+        print(f"Token Usage - Documents: {TOTAL_DOCUMENTS}, Input: {TOTAL_INPUT_TOKENS}, Output: {TOTAL_OUTPUT_TOKENS}")
         return data.natural_text
     else:
+        # Print token counts before returning
+        print(f"Token Usage - Documents: {TOTAL_DOCUMENTS}, Input: {TOTAL_INPUT_TOKENS}, Output: {TOTAL_OUTPUT_TOKENS}")
         return raw_response

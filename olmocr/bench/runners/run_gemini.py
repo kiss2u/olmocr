@@ -27,6 +27,11 @@ from olmocr.data.renderpdf import render_pdf_to_base64png
 from olmocr.prompts.anchor import get_anchor_text
 from olmocr.prompts.prompts import build_openai_silver_data_prompt
 
+# Global variables to track token usage and documents
+TOTAL_INPUT_TOKENS = 0
+TOTAL_OUTPUT_TOKENS = 0
+TOTAL_DOCUMENTS = 0
+
 
 def run_gemini(
     pdf_path: str,
@@ -51,6 +56,8 @@ def run_gemini(
     Returns:
         str: The OCR result in markdown format.
     """
+    global TOTAL_INPUT_TOKENS, TOTAL_OUTPUT_TOKENS, TOTAL_DOCUMENTS
+    TOTAL_DOCUMENTS += 1
     if not os.getenv("GEMINI_API_KEY"):
         raise SystemExit("You must specify an GEMINI_API_KEY")
 
@@ -114,10 +121,18 @@ def run_gemini(
         assert len(response.candidates) > 0, "No candidates found"
         assert response.candidates[0].finish_reason == types.FinishReason.STOP, "Finish reason was not STOP, likely a processing error or repetition failure"
 
+        # Extract token counts from usage metadata
+        if hasattr(response, 'usage_metadata'):
+            input_tokens = getattr(response.usage_metadata, 'prompt_token_count', 0)
+            output_tokens = getattr(response.usage_metadata, 'candidates_token_count', 0)
+            TOTAL_INPUT_TOKENS += input_tokens
+            TOTAL_OUTPUT_TOKENS += output_tokens
+
         result = response.candidates[0].content.parts[0].text
         parsed = json.loads(result)
 
         # The json schema is slightly off with gemini vs chatgpt, so we don't verify it
+        print(f"[Before Return - JSON] Total Documents: {TOTAL_DOCUMENTS}, Total Input Tokens: {TOTAL_INPUT_TOKENS}, Total Output Tokens: {TOTAL_OUTPUT_TOKENS}")
         return parsed["natural_text"]
     else:
         generation_config = types.GenerateContentConfig(
@@ -136,5 +151,13 @@ def run_gemini(
         assert len(response.candidates) > 0, "No candidates found"
         assert response.candidates[0].finish_reason == types.FinishReason.STOP, "Finish reason was not STOP, likely a processing error or repetition failure"
 
+        # Extract token counts from usage metadata
+        if hasattr(response, 'usage_metadata'):
+            input_tokens = getattr(response.usage_metadata, 'prompt_token_count', 0)
+            output_tokens = getattr(response.usage_metadata, 'candidates_token_count', 0)
+            TOTAL_INPUT_TOKENS += input_tokens
+            TOTAL_OUTPUT_TOKENS += output_tokens
+
         result = response.candidates[0].content.parts[0].text
+        print(f"[Before Return - Plain] Total Documents: {TOTAL_DOCUMENTS}, Total Input Tokens: {TOTAL_INPUT_TOKENS}, Total Output Tokens: {TOTAL_OUTPUT_TOKENS}")
         return result
