@@ -140,8 +140,8 @@ MODEL_DATA = [
     ModelData(name="GPT-4.1", cost_per_million=6112, performance=71.0, category="Commercial VLM", label_offset=(-50, 15)),
     ModelData(name="Mistral OCR", cost_per_million=1000, performance=72.0, category="Commercial API Tool", label_offset=(-20, 10)),
 
-    ModelData(name="Gemini Flash 2", cost_per_million=394, performance=66.3, category="Commercial VLM", label_offset=(10, -8)),
-    ModelData(name="Gemini Flash 2.5", cost_per_million=1131, performance=62.1, category="Commercial VLM", label_offset=(-160, 15)),
+    ModelData(name="Gemini Flash 2", cost_per_million=342, performance=66.3, category="Commercial VLM", label_offset=(10, -2)),
+    ModelData(name="Gemini Flash 2.5", cost_per_million=1042, performance=62.1, category="Commercial VLM", label_offset=(-160, 15)),
   
     # Perf data from paper https://arxiv.org/pdf/2509.22186
     ModelData(
