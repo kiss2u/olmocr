@@ -258,10 +258,11 @@ If you have a vLLM server already running elsewhere (or any inference platform i
 
 ```bash
 # Use external vLLM server instead of local one
-python -m olmocr.pipeline ./localworkspace --server http://remote-server:8000/v1 --markdown --pdfs tests/gnarly_pdfs/*.pdf
+python -m olmocr.pipeline ./localworkspace --server http://remote-server:8000/v1 --model allenai/olmOCR-2-7B-1025-FP8 --markdown --pdfs tests/gnarly_pdfs/*.pdf
 ```
+The served model name in VLLM needs to match the value provided in `--model`.
 
-The served model name should be `olmocr`. An example vLLM launch command would be:
+An example vLLM launch command would be:
 ```bash
 vllm serve allenai/olmOCR-2-7B-1025-FP8 --max-model-len 16384
 ```
