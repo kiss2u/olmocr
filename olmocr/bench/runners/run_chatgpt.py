@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 from typing import Literal
 
@@ -22,6 +23,9 @@ from olmocr.prompts.prompts import (
     build_openai_silver_data_prompt_v3_simple,
     openai_response_format_schema,
 )
+
+# Set up logger
+logger = logging.getLogger(__name__)
 
 # Global variables to track token usage and document count
 TOTAL_INPUT_TOKENS = 0
@@ -115,10 +119,10 @@ def run_chatgpt(
         data = json.loads(raw_response)
         data = PageResponse(**data)
 
-        # Print token counts before returning
-        print(f"Token Usage - Documents: {TOTAL_DOCUMENTS}, Input: {TOTAL_INPUT_TOKENS}, Output: {TOTAL_OUTPUT_TOKENS}")
+        # Log token counts before returning
+        logger.warning(f"Token Usage - Documents: {TOTAL_DOCUMENTS}, Input: {TOTAL_INPUT_TOKENS}, Output: {TOTAL_OUTPUT_TOKENS}")
         return data.natural_text
     else:
-        # Print token counts before returning
-        print(f"Token Usage - Documents: {TOTAL_DOCUMENTS}, Input: {TOTAL_INPUT_TOKENS}, Output: {TOTAL_OUTPUT_TOKENS}")
+        # Log token counts before returning
+        logger.warning(f"Token Usage - Documents: {TOTAL_DOCUMENTS}, Input: {TOTAL_INPUT_TOKENS}, Output: {TOTAL_OUTPUT_TOKENS}")
         return raw_response

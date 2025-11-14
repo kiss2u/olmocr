@@ -1,5 +1,6 @@
 import base64
 import json
+import logging
 import os
 from typing import Literal
 
@@ -26,6 +27,9 @@ from olmocr.prompts.prompts import (
 from olmocr.data.renderpdf import render_pdf_to_base64png
 from olmocr.prompts.anchor import get_anchor_text
 from olmocr.prompts.prompts import build_openai_silver_data_prompt
+
+# Set up logger
+logger = logging.getLogger(__name__)
 
 # Global variables to track token usage and documents
 TOTAL_INPUT_TOKENS = 0
@@ -132,7 +136,7 @@ def run_gemini(
         parsed = json.loads(result)
 
         # The json schema is slightly off with gemini vs chatgpt, so we don't verify it
-        print(f"[Before Return - JSON] Total Documents: {TOTAL_DOCUMENTS}, Total Input Tokens: {TOTAL_INPUT_TOKENS}, Total Output Tokens: {TOTAL_OUTPUT_TOKENS}")
+        logger.warning(f"[Before Return - JSON] Total Documents: {TOTAL_DOCUMENTS}, Total Input Tokens: {TOTAL_INPUT_TOKENS}, Total Output Tokens: {TOTAL_OUTPUT_TOKENS}")
         return parsed["natural_text"]
     else:
         generation_config = types.GenerateContentConfig(
@@ -159,5 +163,5 @@ def run_gemini(
             TOTAL_OUTPUT_TOKENS += output_tokens
 
         result = response.candidates[0].content.parts[0].text
-        print(f"[Before Return - Plain] Total Documents: {TOTAL_DOCUMENTS}, Total Input Tokens: {TOTAL_INPUT_TOKENS}, Total Output Tokens: {TOTAL_OUTPUT_TOKENS}")
+        logger.warning(f"[Before Return - Plain] Total Documents: {TOTAL_DOCUMENTS}, Total Input Tokens: {TOTAL_INPUT_TOKENS}, Total Output Tokens: {TOTAL_OUTPUT_TOKENS}")
         return result
