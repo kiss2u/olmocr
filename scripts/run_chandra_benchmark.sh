@@ -1,19 +1,73 @@
 #!/bin/bash
 
 # Runs chandra benchmark, measuring both olmOCR-bench performance and per document processing performance
-#   ./scripts/run_chandra_benchmark.sh
-#   ./scripts/run_chandra_benchmark.sh 0.1.0
+# Usage:
+#   ./scripts/run_chandra_benchmark.sh                                      # Use latest chandra version, default benchmark repo
+#   ./scripts/run_chandra_benchmark.sh 0.1.0                                # Use specific chandra version
+#   ./scripts/run_chandra_benchmark.sh --version 0.1.0                      # Use specific chandra version (explicit flag)
+#   ./scripts/run_chandra_benchmark.sh --benchrepo allenai/olmOCR-bench-internal  # Use different benchmark repo
+#   ./scripts/run_chandra_benchmark.sh --benchbranch olmOCR-bench-1125      # Use specific branch/revision
+#   ./scripts/run_chandra_benchmark.sh --benchpath s3://ai2-oe-data/path/   # Use benchmark from S3 or local path
 
 set -e
 
 # Parse command line arguments
-CHANDRA_VERSION="${1:-latest}"
+CHANDRA_VERSION=""
+BENCH_BRANCH=""
+BENCH_REPO=""
+BENCH_PATH=""
+
+# Default to latest if no version specified
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --version)
+            CHANDRA_VERSION="$2"
+            shift 2
+            ;;
+        --benchbranch)
+            BENCH_BRANCH="$2"
+            shift 2
+            ;;
+        --benchrepo)
+            BENCH_REPO="$2"
+            shift 2
+            ;;
+        --benchpath)
+            BENCH_PATH="$2"
+            shift 2
+            ;;
+        *)
+            # If no flag, assume it's the version for backward compatibility
+            if [ -z "$CHANDRA_VERSION" ]; then
+                CHANDRA_VERSION="$1"
+            else
+                echo "Unknown option: $1"
+                echo "Usage: $0 [VERSION] [--version VERSION] [--benchbranch BRANCH] [--benchrepo REPO] [--benchpath PATH]"
+                exit 1
+            fi
+            shift
+            ;;
+    esac
+done
+
+# Set default chandra version if not specified
+if [ -z "$CHANDRA_VERSION" ]; then
+    CHANDRA_VERSION="latest"
+fi
+
 if [ "$CHANDRA_VERSION" = "latest" ]; then
     echo "Using latest chandra-ocr release"
     CHANDRA_INSTALL_CMD="pip install chandra-ocr"
 else
     echo "Using chandra-ocr version: $CHANDRA_VERSION"
     CHANDRA_INSTALL_CMD="pip install chandra-ocr==$CHANDRA_VERSION"
+fi
+
+# Check for mutual exclusivity between benchpath and benchrepo/benchbranch
+if [ -n "$BENCH_PATH" ] && ([ -n "$BENCH_REPO" ] || [ -n "$BENCH_BRANCH" ]); then
+    echo "Error: --benchpath is mutually exclusive with --benchrepo and --benchbranch"
+    echo "Use either --benchpath OR --benchrepo/--benchbranch, not both."
+    exit 1
 fi
 
 # Check for uncommitted changes
@@ -78,6 +132,27 @@ git_branch = sys.argv[3]
 git_hash = sys.argv[4]
 chandra_version = sys.argv[5]
 chandra_install_cmd = sys.argv[6]
+
+# Initialize benchmark dataset parameters
+bench_branch = None
+bench_repo = "allenai/olmOCR-bench"  # Default repository
+bench_path = None
+
+# Parse additional arguments
+arg_idx = 7
+while arg_idx < len(sys.argv):
+    if sys.argv[arg_idx] == "--benchbranch":
+        bench_branch = sys.argv[arg_idx + 1]
+        arg_idx += 2
+    elif sys.argv[arg_idx] == "--benchrepo":
+        bench_repo = sys.argv[arg_idx + 1]
+        arg_idx += 2
+    elif sys.argv[arg_idx] == "--benchpath":
+        bench_path = sys.argv[arg_idx + 1]
+        arg_idx += 2
+    else:
+        print(f"Unknown argument: {sys.argv[arg_idx]}")
+        arg_idx += 1
 
 # Initialize Beaker client
 b = Beaker.from_env(default_workspace="ai2/olmocr")
@@ -179,6 +254,17 @@ kill $VLLM_PID || true
 wait $VLLM_PID 2>/dev/null || true
 '""")
 
+# Check if HF_TOKEN secret exists
+hf_token_secret = f"{beaker_user}-HF_TOKEN"
+try:
+    # Try to get the secret to see if it exists
+    b.secret.get(hf_token_secret, workspace="ai2/olmocr")
+    has_hf_token = True
+    print(f"Found HuggingFace token secret: {hf_token_secret}")
+except:
+    has_hf_token = False
+    print(f"HuggingFace token secret not found: {hf_token_secret}")
+
 # First experiment: Original benchmark job
 commands = []
 if has_aws_creds:
@@ -186,9 +272,31 @@ if has_aws_creds:
         "mkdir -p ~/.aws",
         'echo "$AWS_CREDENTIALS_FILE" > ~/.aws/credentials'
     ])
+
+if has_hf_token:
+    commands.append('export HF_TOKEN="$HF_TOKEN"')
+
+# Install s5cmd (needed for S3 operations)
+commands.append("pip install s5cmd")
+
+# Handle benchmark data download based on source type
+if bench_path:
+    # If bench_path is provided, use it (can be S3 or local path)
+    if bench_path.startswith("s3://"):
+        # S3 path - use s5cmd to download
+        commands.append(f"s5cmd cp {bench_path.rstrip('/')}/* ./olmOCR-bench/")
+    else:
+        # Local path - copy directly
+        commands.append(f"cp -r {bench_path} ./olmOCR-bench")
+else:
+    # Use HuggingFace download (default behavior)
+    hf_download_cmd = f"hf download --repo-type dataset {bench_repo} --max-workers 2"
+    if bench_branch:
+        hf_download_cmd += f" --revision {bench_branch}"
+    hf_download_cmd += " --local-dir ./olmOCR-bench"
+    commands.append(hf_download_cmd)
+
 commands.extend([
-    "git clone https://huggingface.co/datasets/allenai/olmOCR-bench",
-    "cd olmOCR-bench && git lfs pull && cd ..",
     chandra_install_cmd,
     "pip install --upgrade vllm",  # Ensure vllm is installed
     run_chandra_shell,
@@ -212,11 +320,14 @@ task_spec_args = {
     "result": ResultSpec(path="/noop-results"),
 }
 
-# Add env vars if AWS credentials exist
+# Add env vars if AWS credentials or HF token exist
+env_vars = []
 if has_aws_creds:
-    task_spec_args["env_vars"] = [
-        EnvVar(name="AWS_CREDENTIALS_FILE", secret=aws_creds_secret)
-    ]
+    env_vars.append(EnvVar(name="AWS_CREDENTIALS_FILE", secret=aws_creds_secret))
+if has_hf_token:
+    env_vars.append(EnvVar(name="HF_TOKEN", secret=hf_token_secret))
+if env_vars:
+    task_spec_args["env_vars"] = env_vars
 
 # Create first experiment spec
 chandra_version_label = "latest" if chandra_version == "latest" else chandra_version
@@ -240,6 +351,9 @@ if has_aws_creds:
         "mkdir -p ~/.aws",
         'echo "$AWS_CREDENTIALS_FILE" > ~/.aws/credentials'
     ])
+
+if has_hf_token:
+    perf_commands.append('export HF_TOKEN="$HF_TOKEN"')
 
 # Shell script for performance test
 perf_shell = dedent("""\
@@ -299,11 +413,14 @@ perf_task_spec_args = {
     "result": ResultSpec(path="/noop-results"),
 }
 
-# Add env vars if AWS credentials exist
+# Add env vars if AWS credentials or HF token exist
+env_vars = []
 if has_aws_creds:
-    perf_task_spec_args["env_vars"] = [
-        EnvVar(name="AWS_CREDENTIALS_FILE", secret=aws_creds_secret)
-    ]
+    env_vars.append(EnvVar(name="AWS_CREDENTIALS_FILE", secret=aws_creds_secret))
+if has_hf_token:
+    env_vars.append(EnvVar(name="HF_TOKEN", secret=hf_token_secret))
+if env_vars:
+    perf_task_spec_args["env_vars"] = env_vars
 
 # Create performance experiment spec
 perf_experiment_spec = ExperimentSpec(
@@ -320,7 +437,26 @@ EOF
 
 # Run the Python script to create the experiments
 echo "Creating Beaker experiments..."
-$PYTHON /tmp/run_benchmark_experiment.py $IMAGE_TAG $BEAKER_USER $GIT_BRANCH $GIT_HASH "$CHANDRA_VERSION" "$CHANDRA_INSTALL_CMD"
+
+# Build command with appropriate arguments
+CMD="$PYTHON /tmp/run_benchmark_experiment.py $IMAGE_TAG $BEAKER_USER $GIT_BRANCH $GIT_HASH \"$CHANDRA_VERSION\" \"$CHANDRA_INSTALL_CMD\""
+
+if [ -n "$BENCH_BRANCH" ]; then
+    echo "Using bench branch: $BENCH_BRANCH"
+    CMD="$CMD --benchbranch \"$BENCH_BRANCH\""
+fi
+
+if [ -n "$BENCH_REPO" ]; then
+    echo "Using bench repo: $BENCH_REPO"
+    CMD="$CMD --benchrepo \"$BENCH_REPO\""
+fi
+
+if [ -n "$BENCH_PATH" ]; then
+    echo "Using bench path: $BENCH_PATH"
+    CMD="$CMD --benchpath \"$BENCH_PATH\""
+fi
+
+eval $CMD
 
 # Clean up temporary file
 rm /tmp/run_benchmark_experiment.py
