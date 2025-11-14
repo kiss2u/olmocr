@@ -145,7 +145,7 @@ MODEL_DATA = [
   
     # Perf data from paper https://arxiv.org/pdf/2509.22186
     ModelData(
-        name="MinerU 2.5.4", cost_per_million=cost_per_million_by_page("a100", 2.12), performance=75.2, category="Open Source Tool", label_offset=(10, -10)
+        name="MinerU 2.5.4", cost_per_million=cost_per_million_by_page("a100", 2.12), performance=75.2, category="Open VLM", label_offset=(10, -10)
     ),
     # Perf data is hard to measure, using previously calculated value, using more generous number from v.1.7.5
     ModelData(name="Marker v1.10.1", cost_per_million=1492, performance=76.1, category="Open Source Tool", label_offset=(-25, 10)),
