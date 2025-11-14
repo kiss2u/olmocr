@@ -626,7 +626,11 @@ async def worker(args, work_queue: WorkQueue, semaphore, worker_id):
             await work_queue.mark_done(work_item)
         except Exception as e:
             logger.exception(f"Exception occurred while processing work_hash {work_item.hash}: {e}")
-
+        finally:
+            # Temporary fix for https://github.com/allenai/olmocr/issues/383, for now we will just release the sempahore 
+            # as each worker finishes, so that the process can quit in the end.
+            if args.server:
+                semaphore.release()
 
 async def vllm_server_task(model_name_or_path, args, semaphore, unknown_args=None):
     cmd = [
