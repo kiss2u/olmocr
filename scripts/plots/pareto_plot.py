@@ -134,10 +134,10 @@ def cost_per_million_by_page(gpu: Literal["a100", "h100", "l40s"], pages_sec: fl
 MODEL_DATA = [
     # Perf data from olmocr paper
     #ModelData(name="GPT-4o", cost_per_million=12480, performance=69.9, category="Commercial VLM", label_offset=(-35, 10)),
-    ModelData(name="GPT-4o", cost_per_million=6240, performance=69.9, category="Commercial VLM", label_offset=(-65, 10)),
+    ModelData(name="GPT-4o", cost_per_million=7951, performance=69.9, category="Commercial VLM", label_offset=(0, 10)),
 
     # Rescaled gpt-4o prices to gpt-4.1 api rates (3.093315*3+0.833599*12)/1288* 1000000/2
-    ModelData(name="GPT-4.1", cost_per_million=7485, performance=71.0, category="Commercial VLM", label_offset=(-50, 15)),
+    ModelData(name="GPT-4.1", cost_per_million=6112, performance=71.0, category="Commercial VLM", label_offset=(-50, 15)),
     ModelData(name="Mistral OCR", cost_per_million=1000, performance=72.0, category="Commercial API Tool", label_offset=(-20, 10)),
 
     ModelData(name="Gemini Flash 2", cost_per_million=394, performance=58.4, category="Commercial VLM", label_offset=(-70, -25)),
@@ -160,7 +160,7 @@ MODEL_DATA = [
 
     # Pricing from this tweet: https://x.com/VikParuchuri/status/1980725223616876704
     # You'd get better pricing running locally, but I couldn't get a number
-    #ModelData(name="Chandra OCR API", cost_per_million=4000, performance=83.1, category="Commercial VLM", label_offset=(-85, 10)),
+    ModelData(name="Chandra OCR API", cost_per_million=4000, performance=83.1, category="Commercial VLM", label_offset=(-85, 10)),
 
     # Going off of 200k pages per day per A100
     ModelData(
