@@ -140,8 +140,8 @@ MODEL_DATA = [
     ModelData(name="GPT-4.1", cost_per_million=6112, performance=71.0, category="Commercial VLM", label_offset=(-50, 15)),
     ModelData(name="Mistral OCR", cost_per_million=1000, performance=72.0, category="Commercial API Tool", label_offset=(-20, 10)),
 
-    ModelData(name="Gemini Flash 2", cost_per_million=394, performance=58.4, category="Commercial VLM", label_offset=(-70, -25)),
-    ModelData(name="Gemini Flash 2.5", cost_per_million=1131, performance=58.2, category="Commercial VLM", label_offset=(-160, -45)),
+    ModelData(name="Gemini Flash 2", cost_per_million=394, performance=66.3, category="Commercial VLM", label_offset=(10, -8)),
+    ModelData(name="Gemini Flash 2.5", cost_per_million=1131, performance=62.1, category="Commercial VLM", label_offset=(-160, 15)),
   
     # Perf data from paper https://arxiv.org/pdf/2509.22186
     ModelData(
@@ -153,7 +153,7 @@ MODEL_DATA = [
     #ModelData(name="Qwen 2 VL", cost_per_million=???, performance=61.3, category="Open VLM", label_offset=(-35, 10)),
     ModelData(name="Qwen 2.5 VL", cost_per_million=cost_per_million_by_page("h100", 10000 / (36 * 60 + 47)), performance=64.5, category="Open VLM", label_offset=(-35, 10)),
     # Using original olmocr cost, but scaling it by 3100/2100 which is the tokens/second rate difference that we see on H100 inference
-    ModelData(name="Qwen 3 VL 8B", cost_per_million=cost_per_million_by_page("h100", 10000 / (36 * 60 + 47)) * (3100/2100), performance=61.4, category="Open VLM", label_offset=(-35, -20)),
+    ModelData(name="Qwen 3 VL 8B", cost_per_million=cost_per_million_by_page("h100", 10000 / (36 * 60 + 47)) * (3100/2100), performance=61.4, category="Open VLM", label_offset=(-35, -25)),
 
     # Perf data from https://arxiv.org/pdf/2509.22186
     ModelData(name="Nanonets-OCR2-3B", cost_per_million=cost_per_million_by_page("a100", 0.55), performance=69.5, category="Open VLM", label_offset=(-85, 10)),
