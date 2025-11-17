@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 from bs4 import BeautifulSoup
 
-from olmocr.bench.synth.mine_html_templates import (
+from olmocr.synth.mine_html_templates import (
     PreserveTablesConverter,
     extract_html_metadata,
     generate_tests_from_html,
@@ -897,7 +897,7 @@ class TestMineTests(unittest.TestCase):
         import os
         import tempfile
 
-        from olmocr.bench.synth.mine_html_templates import render_pdf_with_playwright
+        from olmocr.synth.mine_html_templates import render_pdf_with_playwright
 
         # Create HTML with LaTeX expressions
         html_content = """

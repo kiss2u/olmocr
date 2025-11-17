@@ -3,7 +3,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from olmocr.bench.synth.mine_html_templates import generate_tests_from_html
+from olmocr.synth.mine_html_templates import generate_tests_from_html
 
 
 class TestFootnoteTestGeneration(unittest.TestCase):
@@ -13,7 +13,7 @@ class TestFootnoteTestGeneration(unittest.TestCase):
         self.page_num = 1
         self.uuid_counter = 0
         uuid_patch = patch(
-            "olmocr.bench.synth.mine_html_templates.uuid.uuid4",
+            "olmocr.synth.mine_html_templates.uuid.uuid4",
             side_effect=self._fake_uuid,
         )
         self.addCleanup(uuid_patch.stop)

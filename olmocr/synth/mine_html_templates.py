@@ -751,7 +751,7 @@ async def render_pdf_with_playwright(html_content, output_pdf_path, png_width, p
                 await page.set_content(html_content)
 
                 # Add in katex and setup auto rendering
-                katex_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "katex")
+                katex_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "bench", "katex")
                 katex_css_path = os.path.join(katex_dir, "katex.min.css")
                 katex_js_path = os.path.join(katex_dir, "katex.min.js")
                 katex_autorender_js_path = os.path.join(katex_dir, "auto-render.min.js")

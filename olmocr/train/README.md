@@ -139,7 +139,7 @@ You can use the following command to download the synthetic dataset:
 hf download allenai/olmOCR-synthmix-1025 --repo-type dataset --local-dir olmOCR-synthmix-1025
 ```
 
-This was generated using [mine_html_templates.py](olmocr/bench/synth/mine_html_templates.py), and is in the same format as other olmOCR-bench test cases. This means you can measure performance against these cases directly in the same way as running any other olmOCR-bench test suite.
+This was generated using [mine_html_templates.py](olmocr/synth/mine_html_templates.py), and is in the same format as other olmOCR-bench test cases. This means you can measure performance against these cases directly in the same way as running any other olmOCR-bench test suite.
 
 The following scripts show how to start training, which is performed on an 8xH100 GPU node. One GPU is dedicated to running VLLM, while the other 7 are used to run training. At the moment, this code is quite specialized to our cluster here, but we hope to make it easier to run elsewhere in future releases.
 
