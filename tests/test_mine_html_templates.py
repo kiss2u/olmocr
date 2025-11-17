@@ -284,7 +284,7 @@ class TestMineTests(unittest.TestCase):
 
         tests = generate_tests_from_html(html_content, "0", 1, self.random_generator)
 
-        self.assertEqual(len([test for test in tests if test["type"] == "absent"]), 1)
+        self.assertEqual(len([test for test in tests if test["type"] == "absent" and "footer" in test.get("id", "")]), 1)
 
     def test_div_footer(self):
         html_content = """
@@ -388,7 +388,8 @@ class TestMineTests(unittest.TestCase):
 
         tests = generate_tests_from_html(html_content, "0", 1, self.random_generator)
 
-        self.assertEqual(len([test for test in tests if test["type"] == "absent"]), 4)
+        self.assertEqual(len([test for test in tests if test["type"] == "absent" and "footer" in test.get("id", "")]), 2)
+        self.assertEqual(len([test for test in tests if test["type"] == "absent" and "header" in test.get("id", "")]), 2)
 
     def test_table(self):
         html_content = """
@@ -2250,8 +2251,9 @@ class TestFormatTestGeneration(unittest.TestCase):
         self.assertGreater(len(order_tests), 0)
 
     def test_common_words_absence(self):
-        """Test that 3 randomly selected common words not appearing on the page are added as absence tests"""
+        """Test that 3 common words most similar to page content are added as absence tests"""
         # Create HTML content that deliberately excludes very common English words
+        # but includes words like "physical", "specific", "required" which are similar to common words
         html_content = """
         <html>
         <body>
@@ -2266,6 +2268,7 @@ class TestFormatTestGeneration(unittest.TestCase):
         """
 
         # Note: This content deliberately avoids some very common words like "the", "to", "and", "of", "a", "in", "is", "for", "that"
+        # But includes words that might be similar (e.g., "specific" is similar to "specify", "required" to "require")
         tests = generate_tests_from_html(html_content, self.pdf_id, self.page_num, self.random_gen, False)
 
         # Find absence tests for common words

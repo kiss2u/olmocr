@@ -1292,14 +1292,33 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
                 # If error getting Zipf frequency, still include with a high assumed frequency
                 absent_common_words.append((word, 6.0))
 
-    # Randomly select 3 absent common words
-    if len(absent_common_words) > 0:
-        num_to_select = min(3, len(absent_common_words))
-        random_gen.shuffle(absent_common_words)
-        selected_absent_words = absent_common_words[:num_to_select]
+    # Select 3 absent common words that are most similar to words on the page
+    if len(absent_common_words) > 0 and len(page_words_set) > 0:
+        from rapidfuzz import fuzz
 
-        # Create absence tests for these randomly selected common words
-        for word, zipf_freq in selected_absent_words:
+        # Calculate similarity scores for each absent word
+        absent_words_with_similarity = []
+        page_words_list = list(page_words_set)  # Convert to list for iteration
+
+        for word, zipf_freq in absent_common_words:
+            # Calculate max similarity to any word on the page
+            max_similarity = 0
+            for page_word in page_words_list:
+                similarity = fuzz.ratio(word.lower(), page_word)
+                if similarity > max_similarity:
+                    max_similarity = similarity
+
+            absent_words_with_similarity.append((word, zipf_freq, max_similarity))
+
+        # Sort by similarity score (descending) to get words most similar to page content
+        absent_words_with_similarity.sort(key=lambda x: x[2], reverse=True)
+
+        # Select top 3 most similar words
+        num_to_select = min(3, len(absent_words_with_similarity))
+        selected_absent_words = absent_words_with_similarity[:num_to_select]
+
+        # Create absence tests for these selected common words
+        for word, zipf_freq, similarity_score in selected_absent_words:
             test_data = {
                 "pdf": pdf_filename,
                 "page": 1,
@@ -1307,22 +1326,16 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
                 "type": TestType.ABSENT.value,
                 "text": word,
                 "max_diffs": 0,
+                "case_sensitive": False,
             }
 
             # Double-check the word really doesn't appear in the markdown text
-            # Create test object to validate
+            # For ABSENT tests, we want to ensure the word is NOT found
             try:
-                test_obj = TextPresenceTest(
-                    pdf=test_data["pdf"],
-                    page=test_data["page"],
-                    id=test_data["id"],
-                    type=test_data["type"],
-                    text=test_data["text"],
-                    max_diffs=test_data["max_diffs"]
-                )
+                validation_test = TextPresenceTest(**test_data)
 
-                # Run the test against the markdown content
-                passed, _ = test_obj.run(markdown_text)
+                # Run the validation test against the markdown content
+                passed, _ = validation_test.run(markdown_text)
 
                 if passed:
                     tests.append(test_data)
