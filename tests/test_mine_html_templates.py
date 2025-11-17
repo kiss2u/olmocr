@@ -2195,9 +2195,53 @@ class TestFormatTestGeneration(unittest.TestCase):
         self.assertIn("Good Bold", format_texts)
         self.assertIn("Nice Italic", format_texts)
 
+    def test_bold_number_order_bug(self):
+        """Test that bold numbers in HTML don't create invalid order tests with max_diffs=1
 
+        This test catches a bug where <b>6</b> in HTML gets converted to **6** in markdown,
+        which then gets selected as a sentence for order tests. Since **6** has exactly 5
+        characters, it passes the length check, but when compared with a longer sentence,
+        max_diffs gets set to 1 (2% of the longer sentence), which is problematic.
+        """
+        html_content = """
+        <html>
+        <body>
+            <p>This is a normal sentence with some content</p>
+            <p><b>6</b></p>
+            <p>Another sentence here that has stuff</p>
+        </body>
+        </html>
+        """
 
+        tests = generate_tests_from_html(html_content, self.pdf_id, self.page_num, self.random_gen, False)
 
+        # You don't want to see any order tests in this case, because the <b> has caused the text comparison to be too small
+        order_tests = [t for t in tests if t.get("type") == "order"]
+        self.assertEqual(order_tests, [])
+
+    def test_bold_number_order_bug2(self):
+        """Test that bold numbers in HTML don't create invalid order tests with max_diffs=1
+
+        This test catches a bug where <b>6</b> in HTML gets converted to **6** in markdown,
+        which then gets selected as a sentence for order tests. Since **6** has exactly 5
+        characters, it passes the length check, but when compared with a longer sentence,
+        max_diffs gets set to 1 (2% of the longer sentence), which is problematic.
+        """
+        html_content = """
+        <html>
+        <body>
+            <p>This is a normal sentence with some content</p>
+            <p><b>Wow cool!</b></p>
+            <p>Another sentence here that has stuff</p>
+        </body>
+        </html>
+        """
+
+        tests = generate_tests_from_html(html_content, self.pdf_id, self.page_num, self.random_gen, False)
+
+        # You don't want to see any order tests in this case, because the <b> has caused the text comparison to be too small
+        order_tests = [t for t in tests if t.get("type") == "order"]
+        self.assertGreater(len(order_tests), 0)
 
 if __name__ == "__main__":
     unittest.main()

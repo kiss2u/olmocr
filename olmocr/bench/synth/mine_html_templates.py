@@ -1105,7 +1105,7 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
                         if sentence_str.startswith("- "):
                             sentence_str = sentence_str[2:]
 
-                        sentence_str = sentence_str.strip()
+                        sentence_str = normalize_text(sentence_str.strip())
 
                         if sentence_str:  # Only add if there's still content after cleaning
                             sentences.append(sentence_str)
