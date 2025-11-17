@@ -54,3 +54,6 @@ RUN playwright install-deps
 RUN playwright install chromium
 
 RUN python3 -m olmocr.pipeline --help
+
+# Override the vLLM base image's entrypoint to allow interactive bash access
+ENTRYPOINT ["/bin/bash"]
