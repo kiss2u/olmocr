@@ -315,32 +315,43 @@ python -m olmocr.pipeline s3://my_s3_bucket/pdfworkspaces/exampleworkspace --pdf
 
 ### Using Docker
 
-Pull the Docker image.
+Pull the Docker image (large, includes the model, ~30GB):
+```bash
+docker pull alleninstituteforai/olmocr:latest-with-model
+```
+
+For advanced users who want to manage their own model downloads, we also provide a base image without the model:
 ```bash
 docker pull alleninstituteforai/olmocr:latest
 ```
 
-To run the container interactively:
+#### Quick Start - Process PDFs
+
+Process a single PDF in your current directory:
 ```bash
-docker run -it --gpus all --name olmocr_container alleninstituteforai/olmocr:latest /bin/bash
+docker run --gpus all \
+  -v $(pwd):/workspace \
+  alleninstituteforai/olmocr:latest-with-model \
+  -c "python -m olmocr.pipeline /workspace/output --markdown --pdfs /workspace/sample.pdf"
 ```
 
-If you want to access your local files inside the container, use volume mounting:
+Process multiple PDFs:
 ```bash
-docker run -it --gpus all \
-  -v /path/to/your/local/files:/local_files \
-  --name olmocr_container \
-  alleninstituteforai/olmocr:latest /bin/bash
+docker run --gpus all \
+  -v /path/to/pdfs:/input \
+  -v /path/to/output:/output \
+  alleninstituteforai/olmocr:latest-with-model \
+  -c "python -m olmocr.pipeline /output --markdown --pdfs /input/*.pdf"
 ```
 
-All dependencies are already installed. Once you’re inside the container, you can run olmOCR commands. For example:
+#### Interactive Mode
 
+Run the container interactively for exploration and debugging:
 ```bash
-curl -o olmocr-sample.pdf https://olmocr.allenai.org/papers/olmocr_3pg_sample.pdf
-
-python -m olmocr.pipeline ./localworkspace --markdown --pdfs olmocr-sample.pdf
+docker run -it --gpus all alleninstituteforai/olmocr:latest-with-model
 ```
-> You can also visit our Docker repository on [Docker Hub](https://hub.docker.com/r/alleninstituteforai/olmocr).
+
+> Visit our Docker repository on [Docker Hub](https://hub.docker.com/r/alleninstituteforai/olmocr) for more information.
 
 ### Full documentation for the pipeline
 
