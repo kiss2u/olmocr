@@ -56,7 +56,13 @@ class TestMineTests(unittest.TestCase):
 """
         tests = generate_tests_from_html(html_content, "0", 1, self.random_generator)
 
-        self.assertEqual(len([test for test in tests if test["type"] == "absent"]), 2)
+        # Check for footer-specific absent tests (excluding common word absences)
+        footer_absent_tests = [test for test in tests if test["type"] == "absent" and "footer" in test.get("id", "")]
+        self.assertEqual(len(footer_absent_tests), 2)
+
+        # Also check that common word absent tests are being generated
+        common_absent_tests = [test for test in tests if test["type"] == "absent" and "absent_common" in test.get("id", "")]
+        self.assertGreater(len(common_absent_tests), 0)
 
     def test_text_basic(self):
         html_content = """
@@ -2242,6 +2248,46 @@ class TestFormatTestGeneration(unittest.TestCase):
         # You don't want to see any order tests in this case, because the <b> has caused the text comparison to be too small
         order_tests = [t for t in tests if t.get("type") == "order"]
         self.assertGreater(len(order_tests), 0)
+
+    def test_common_words_absence(self):
+        """Test that 3 randomly selected common words not appearing on the page are added as absence tests"""
+        # Create HTML content that deliberately excludes very common English words
+        html_content = """
+        <html>
+        <body>
+            <h1>Scientific Research Paper</h1>
+            <p>Quantum mechanics describes physical properties at atomic scale.</p>
+            <p>Experiments demonstrate wave-particle duality phenomenon.</p>
+            <p>Mathematical equations predict behavior accurately.</p>
+            <p>Results confirm theoretical predictions remarkably well.</p>
+            <p>Further investigation required regarding specific anomalies.</p>
+        </body>
+        </html>
+        """
+
+        # Note: This content deliberately avoids some very common words like "the", "to", "and", "of", "a", "in", "is", "for", "that"
+        tests = generate_tests_from_html(html_content, self.pdf_id, self.page_num, self.random_gen, False)
+
+        # Find absence tests for common words
+        absent_common_tests = [t for t in tests if t.get("type") == "absent" and "absent_common" in t.get("id", "")]
+
+        # We should have up to 3 absence tests for common words not on the page
+        self.assertGreater(len(absent_common_tests), 0, "Should have at least one common word absence test")
+        self.assertLessEqual(len(absent_common_tests), 3, "Should have at most 3 common word absence tests")
+
+        # Check that these are indeed common words (they should be in the top 1000 most common words)
+        from wordfreq import top_n_list
+        top_1000_words = set(top_n_list('en', 1000))
+
+        for test in absent_common_tests:
+            word = test["text"].lower()
+            self.assertIn(word, top_1000_words, f"'{word}' should be a common English word from top 1000")
+
+        # Verify that the absent words really don't appear in the content
+        markdown = html_to_markdown_with_frontmatter(html_content)
+        for test in absent_common_tests:
+            word = test["text"].lower()
+            self.assertNotIn(word, markdown.lower(), f"'{word}' should not appear in the content")
 
 if __name__ == "__main__":
     unittest.main()

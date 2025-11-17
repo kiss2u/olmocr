@@ -171,6 +171,14 @@ class TestTextPresenceTest(unittest.TestCase):
         result, explanation = test.run("This is some targetttt text in a document")
         self.assertTrue(result)
 
+    def test_absent_test_subsets(self):
+        """Test that ABSENT test returns False when text is found"""
+        test = TextPresenceTest(pdf="test.pdf", page=1, id="test_id", type=TestType.ABSENT.value, text="max", max_diffs=0)
+        result, explanation = test.run("There is a max set of diffs to make")
+        self.assertFalse(result)
+        result, explanation = test.run("This is some maximum text in a document")
+        self.assertFalse(result)
+
     def test_absent_text_not_found(self):
         """Test that ABSENT test returns True when text is not found"""
         test = TextPresenceTest(pdf="test.pdf", page=1, id="test_id", type=TestType.ABSENT.value, text="missing text")

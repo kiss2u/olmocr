@@ -21,7 +21,7 @@ from playwright.async_api import async_playwright
 from syntok.segmenter import process
 from tqdm import tqdm
 
-from wordfreq import zipf_frequency
+from wordfreq import zipf_frequency, top_n_list
 
 
 from olmocr.bench.tests import TableTest, TestType, normalize_text, parse_html_tables, TextPresenceTest, BaselineTest, FormatTest, FootnoteTest
@@ -1266,6 +1266,69 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
         except Exception:
             # Skip if test creation or validation fails
             pass
+
+    # Step 3.5: Generate absence tests for 3 randomly selected common words that don't appear on the page
+    # Get the top 1000 most common words using wordfreq
+    lang_code = primary_language if len(primary_language) == 2 else 'en'
+    try:
+        # Get top 1000 common words
+        common_words_list = top_n_list(lang_code, 1000)
+    except:
+        # Fallback to English if language not supported
+        common_words_list = top_n_list('en', 1000)
+
+    # Build a set of words that appear on the page (lowercase)
+    page_words_set = set(word.lower() for word in word_counter.keys())
+
+    # Find common words not on the page
+    absent_common_words = []
+    for word in common_words_list:
+        if word.lower() not in page_words_set and len(word) >= 2:  # Skip if word is on page
+            # Get the Zipf frequency to ensure it's truly common
+            try:
+                zipf = zipf_frequency(word, lang_code)
+                absent_common_words.append((word, zipf))
+            except:
+                # If error getting Zipf frequency, still include with a high assumed frequency
+                absent_common_words.append((word, 6.0))
+
+    # Randomly select 3 absent common words
+    if len(absent_common_words) > 0:
+        num_to_select = min(3, len(absent_common_words))
+        random_gen.shuffle(absent_common_words)
+        selected_absent_words = absent_common_words[:num_to_select]
+
+        # Create absence tests for these randomly selected common words
+        for word, zipf_freq in selected_absent_words:
+            test_data = {
+                "pdf": pdf_filename,
+                "page": 1,
+                "id": f"{pdf_id}_absent_common_{uuid.uuid4().hex[:8]}",
+                "type": TestType.ABSENT.value,
+                "text": word,
+                "max_diffs": 0,
+            }
+
+            # Double-check the word really doesn't appear in the markdown text
+            # Create test object to validate
+            try:
+                test_obj = TextPresenceTest(
+                    pdf=test_data["pdf"],
+                    page=test_data["page"],
+                    id=test_data["id"],
+                    type=test_data["type"],
+                    text=test_data["text"],
+                    max_diffs=test_data["max_diffs"]
+                )
+
+                # Run the test against the markdown content
+                passed, _ = test_obj.run(markdown_text)
+
+                if passed:
+                    tests.append(test_data)
+            except Exception:
+                # Skip if test creation or validation fails
+                pass
 
     # Step 4: Generate Math tests for LaTeX equations from the markdown
 
