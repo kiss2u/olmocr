@@ -15,7 +15,8 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --dataset)
-            DATASET="$2"
+            # Strip trailing slashes from dataset path
+            DATASET="${2%/}"
             shift 2
             ;;
         --skip-docker-build)
