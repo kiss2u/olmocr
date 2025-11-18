@@ -548,10 +548,11 @@ async def generate_html_from_image(client, image_base64):
                             "2. Use the <header> and <footer> tags to represent content at the top/bottom which would not normally be part of the main content, such as page numbers, etc.\n"
                             "3. Use a placeholder <div> tag with class 'image' which will render as a grey box with black outline to make sure images have their original size, shape, and position on the page. Include an alt-text of the original image as a 'data-description' attribute on the tag. Include 'data-x', 'data-y', 'data-width', 'data-height' attributes which specify where the image was found in the original document.\n"
                             "4. Render any math equations and Latex inline using either \\[ \\] or \\( \\) delimeters.\n"
-                            "5. CRITICAL: If the document has a multi-column layout, you MUST preserve the exact same number of columns in your HTML. Use CSS flexbox or grid to create the columns.\n"
-                            "6. Focus on creating valid, accessible HTML that preserves the appearance and formatting of the original page as closely as possible.\n"
-                            f"7. The webpage will be viewed with a fixed viewport size of {png_width} pixels wide by {png_height} pixels tall.\n"
-                            "8. For multi-column layouts, use explicit CSS. The most important aspect is preserving the column structure of the original document - this is critical.\n\n"
+                            "5. Render any subscripts and superscripts in <sub> and <sup> tags, not in Unicode characters.\n"
+                            "6. CRITICAL: If the document has a multi-column layout, you MUST preserve the exact same number of columns in your HTML. Use CSS flexbox or grid to create the columns.\n"
+                            "7. Focus on creating valid, accessible HTML that preserves the appearance and formatting of the original page as closely as possible.\n"
+                            f"8. The webpage will be viewed with a fixed viewport size of {png_width} pixels wide by {png_height} pixels tall.\n"
+                            "9. For multi-column layouts, use explicit CSS. The most important aspect is preserving the column structure of the original document - this is critical.\n\n"
                             "Enclose your HTML in a ```html code block.",
                         },
                     ],
