@@ -1231,7 +1231,7 @@ async def main():
                 else:
                     raise ValueError(f"Unsupported file extension for {pdf_path}")
             else:
-                raise ValueError("pdfs argument needs to be either a local path, an s3 path, or an s3 glob pattern...")
+                raise ValueError(f"pdfs argument '{pdf_path}' needs to be either a local path, an s3 path, or an s3 glob pattern...")
 
         logger.info(f"Found {len(pdf_work_paths):,} total pdf paths to add")
 
