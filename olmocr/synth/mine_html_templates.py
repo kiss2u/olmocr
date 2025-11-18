@@ -1269,79 +1269,81 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
 
     # Step 3.5: Generate absence tests for 3 randomly selected common words that don't appear on the page
     # Get the top 1000 most common words using wordfreq
-    lang_code = primary_language if len(primary_language) == 2 else 'en'
-    try:
-        # Get top 1000 common words
-        common_words_list = top_n_list(lang_code, 1000)
-    except:
-        # Fallback to English if language not supported
-        common_words_list = top_n_list('en', 1000)
+    # Note from Jake: For now, I am commenting this out, I can't just help shake this feeling that this would
+    # incentivize the model in slightly the wrong way somehow.
+    # lang_code = primary_language if len(primary_language) == 2 else 'en'
+    # try:
+    #     # Get top 1000 common words
+    #     common_words_list = top_n_list(lang_code, 1000)
+    # except:
+    #     # Fallback to English if language not supported
+    #     common_words_list = top_n_list('en', 1000)
 
-    # Build a set of words that appear on the page (lowercase)
-    page_words_set = set(word.lower() for word in word_counter.keys())
+    # # Build a set of words that appear on the page (lowercase)
+    # page_words_set = set(word.lower() for word in word_counter.keys())
 
-    # Find common words not on the page
-    absent_common_words = []
-    for word in common_words_list:
-        if word.lower() not in page_words_set and len(word) >= 2:  # Skip if word is on page
-            # Get the Zipf frequency to ensure it's truly common
-            try:
-                zipf = zipf_frequency(word, lang_code)
-                absent_common_words.append((word, zipf))
-            except:
-                # If error getting Zipf frequency, still include with a high assumed frequency
-                absent_common_words.append((word, 6.0))
+    # # Find common words not on the page
+    # absent_common_words = []
+    # for word in common_words_list:
+    #     if word.lower() not in page_words_set and len(word) >= 2:  # Skip if word is on page
+    #         # Get the Zipf frequency to ensure it's truly common
+    #         try:
+    #             zipf = zipf_frequency(word, lang_code)
+    #             absent_common_words.append((word, zipf))
+    #         except:
+    #             # If error getting Zipf frequency, still include with a high assumed frequency
+    #             absent_common_words.append((word, 6.0))
 
-    # Select 3 absent common words that are most similar to words on the page
-    if len(absent_common_words) > 0 and len(page_words_set) > 0:
-        from rapidfuzz import fuzz
+    # # Select 3 absent common words that are most similar to words on the page
+    # if len(absent_common_words) > 0 and len(page_words_set) > 0:
+    #     from rapidfuzz import fuzz
 
-        # Calculate similarity scores for each absent word
-        absent_words_with_similarity = []
-        page_words_list = list(page_words_set)  # Convert to list for iteration
+    #     # Calculate similarity scores for each absent word
+    #     absent_words_with_similarity = []
+    #     page_words_list = list(page_words_set)  # Convert to list for iteration
 
-        for word, zipf_freq in absent_common_words:
-            # Calculate max similarity to any word on the page
-            max_similarity = 0
-            for page_word in page_words_list:
-                similarity = fuzz.ratio(word.lower(), page_word)
-                if similarity > max_similarity:
-                    max_similarity = similarity
+    #     for word, zipf_freq in absent_common_words:
+    #         # Calculate max similarity to any word on the page
+    #         max_similarity = 0
+    #         for page_word in page_words_list:
+    #             similarity = fuzz.ratio(word.lower(), page_word)
+    #             if similarity > max_similarity:
+    #                 max_similarity = similarity
 
-            absent_words_with_similarity.append((word, zipf_freq, max_similarity))
+    #         absent_words_with_similarity.append((word, zipf_freq, max_similarity))
 
-        # Sort by similarity score (descending) to get words most similar to page content
-        absent_words_with_similarity.sort(key=lambda x: x[2], reverse=True)
+    #     # Sort by similarity score (descending) to get words most similar to page content
+    #     absent_words_with_similarity.sort(key=lambda x: x[2], reverse=True)
 
-        # Select top 3 most similar words
-        num_to_select = min(3, len(absent_words_with_similarity))
-        selected_absent_words = absent_words_with_similarity[:num_to_select]
+    #     # Select top 3 most similar words
+    #     num_to_select = min(3, len(absent_words_with_similarity))
+    #     selected_absent_words = absent_words_with_similarity[:num_to_select]
 
-        # Create absence tests for these selected common words
-        for word, zipf_freq, similarity_score in selected_absent_words:
-            test_data = {
-                "pdf": pdf_filename,
-                "page": 1,
-                "id": f"{pdf_id}_absent_common_{uuid.uuid4().hex[:8]}",
-                "type": TestType.ABSENT.value,
-                "text": word,
-                "max_diffs": 0,
-                "case_sensitive": False,
-            }
+    #     # Create absence tests for these selected common words
+    #     for word, zipf_freq, similarity_score in selected_absent_words:
+    #         test_data = {
+    #             "pdf": pdf_filename,
+    #             "page": 1,
+    #             "id": f"{pdf_id}_absent_common_{uuid.uuid4().hex[:8]}",
+    #             "type": TestType.ABSENT.value,
+    #             "text": word,
+    #             "max_diffs": 0,
+    #             "case_sensitive": False,
+    #         }
 
-            # Double-check the word really doesn't appear in the markdown text
-            # For ABSENT tests, we want to ensure the word is NOT found
-            try:
-                validation_test = TextPresenceTest(**test_data)
+    #         # Double-check the word really doesn't appear in the markdown text
+    #         # For ABSENT tests, we want to ensure the word is NOT found
+    #         try:
+    #             validation_test = TextPresenceTest(**test_data)
 
-                # Run the validation test against the markdown content
-                passed, _ = validation_test.run(markdown_text)
+    #             # Run the validation test against the markdown content
+    #             passed, _ = validation_test.run(markdown_text)
 
-                if passed:
-                    tests.append(test_data)
-            except Exception:
-                # Skip if test creation or validation fails
-                pass
+    #             if passed:
+    #                 tests.append(test_data)
+    #         except Exception:
+    #             # Skip if test creation or validation fails
+    #             pass
 
     # Step 4: Generate Math tests for LaTeX equations from the markdown
 

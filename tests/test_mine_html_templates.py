@@ -60,10 +60,6 @@ class TestMineTests(unittest.TestCase):
         footer_absent_tests = [test for test in tests if test["type"] == "absent" and "footer" in test.get("id", "")]
         self.assertEqual(len(footer_absent_tests), 2)
 
-        # Also check that common word absent tests are being generated
-        common_absent_tests = [test for test in tests if test["type"] == "absent" and "absent_common" in test.get("id", "")]
-        self.assertGreater(len(common_absent_tests), 0)
-
     def test_text_basic(self):
         html_content = """
 
@@ -2250,6 +2246,7 @@ class TestFormatTestGeneration(unittest.TestCase):
         order_tests = [t for t in tests if t.get("type") == "order"]
         self.assertGreater(len(order_tests), 0)
 
+    @unittest.skip("We have commented out this type of automatic test, due to concerns it would incentivize the model wrongly")
     def test_common_words_absence(self):
         """Test that 3 common words most similar to page content are added as absence tests"""
         # Create HTML content that deliberately excludes very common English words
