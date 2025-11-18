@@ -54,16 +54,18 @@ class TestFootnoteTestGeneration(unittest.TestCase):
 
         self.assertSetEqual(
             footnote_tests,
-            self._hashable_tests([
-                {
-                    "pdf": "test_pdf_page1.pdf",
-                    "page": 1,
-                    "type": "footnote",
-                    "marker": "1",
-                    "max_diffs": 0,
-                    "appears_before_marker": "Alpha with reference",
-                }
-            ]),
+            self._hashable_tests(
+                [
+                    {
+                        "pdf": "test_pdf_page1.pdf",
+                        "page": 1,
+                        "type": "footnote",
+                        "marker": "1",
+                        "max_diffs": 0,
+                        "appears_before_marker": "Alpha with reference",
+                    }
+                ]
+            ),
         )
 
     def test_marker_with_definition_includes_text(self):
@@ -79,17 +81,19 @@ class TestFootnoteTestGeneration(unittest.TestCase):
 
         self.assertSetEqual(
             footnote_tests,
-            self._hashable_tests([
-                {
-                    "pdf": "test_pdf_page1.pdf",
-                    "page": 1,
-                    "type": "footnote",
-                    "marker": "1",
-                    "max_diffs": 0,
-                    "appears_before_marker": "Alpha with reference",
-                    "appears_after_marker": "This is the",
-                }
-            ]),
+            self._hashable_tests(
+                [
+                    {
+                        "pdf": "test_pdf_page1.pdf",
+                        "page": 1,
+                        "type": "footnote",
+                        "marker": "1",
+                        "max_diffs": 0,
+                        "appears_before_marker": "Alpha with reference",
+                        "appears_after_marker": "This is the",
+                    }
+                ]
+            ),
         )
 
     def test_multiple_markers_mixed_occurrences(self):
@@ -108,34 +112,36 @@ class TestFootnoteTestGeneration(unittest.TestCase):
 
         self.assertSetEqual(
             footnote_tests,
-            self._hashable_tests([
-                {
-                    "pdf": "test_pdf_page1.pdf",
-                    "page": 1,
-                    "type": "footnote",
-                    "marker": "1",
-                    "max_diffs": 0,
-                    "appears_before_marker": "ends with marker",
-                    "appears_after_marker": "Definition for footnote",
-                },
-                {
-                    "pdf": "test_pdf_page1.pdf",
-                    "page": 1,
-                    "type": "footnote",
-                    "marker": "2",
-                    "max_diffs": 0,
-                    "appears_before_marker": "paragraph carries marker",
-                    "appears_after_marker": "Definition for footnote",
-                },
-                {
-                    "pdf": "test_pdf_page1.pdf",
-                    "page": 1,
-                    "type": "footnote",
-                    "marker": "3",
-                    "max_diffs": 0,
-                    "appears_before_marker": "a lone marker",
-                },
-            ]),
+            self._hashable_tests(
+                [
+                    {
+                        "pdf": "test_pdf_page1.pdf",
+                        "page": 1,
+                        "type": "footnote",
+                        "marker": "1",
+                        "max_diffs": 0,
+                        "appears_before_marker": "ends with marker",
+                        "appears_after_marker": "Definition for footnote",
+                    },
+                    {
+                        "pdf": "test_pdf_page1.pdf",
+                        "page": 1,
+                        "type": "footnote",
+                        "marker": "2",
+                        "max_diffs": 0,
+                        "appears_before_marker": "paragraph carries marker",
+                        "appears_after_marker": "Definition for footnote",
+                    },
+                    {
+                        "pdf": "test_pdf_page1.pdf",
+                        "page": 1,
+                        "type": "footnote",
+                        "marker": "3",
+                        "max_diffs": 0,
+                        "appears_before_marker": "a lone marker",
+                    },
+                ]
+            ),
         )
 
     def test_cutoff(self):
@@ -147,17 +153,20 @@ class TestFootnoteTestGeneration(unittest.TestCase):
 
         self.assertSetEqual(
             footnote_tests,
-            self._hashable_tests([
-                {
-                    "pdf": "test_pdf_page1.pdf",
-                    "page": 1,
-                    "type": "footnote",
-                    "marker": "1",
-                    "max_diffs": 0,
-                    "appears_before_marker": "(EU) No 2018/1725",
-                },
-            ]),
+            self._hashable_tests(
+                [
+                    {
+                        "pdf": "test_pdf_page1.pdf",
+                        "page": 1,
+                        "type": "footnote",
+                        "marker": "1",
+                        "max_diffs": 0,
+                        "appears_before_marker": "(EU) No 2018/1725",
+                    },
+                ]
+            ),
         )
+
 
 if __name__ == "__main__":
     unittest.main()

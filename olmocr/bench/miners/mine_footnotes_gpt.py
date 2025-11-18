@@ -29,9 +29,11 @@ from olmocr.filter import PdfFilter
 
 TARGET_IMAGE_DIM = 2048
 
+
 class Footnote(BaseModel):
     marker: str
     text: str
+
 
 class FootnoteDetectionResponse(BaseModel):
     """Structured output for footnote detection."""
@@ -90,8 +92,10 @@ def check_for_footnotes(pdf_path: str, page_num: int, api_key: str) -> Optional[
         image_base64 = render_pdf_to_base64png(pdf_path, page_num=page_num + 1, target_longest_image_dim=TARGET_IMAGE_DIM)
 
         # Simple prompt asking about footnotes
-        prompt = "Does this page contain footnotes? Ex. something you'd mark with a <sup> tag in html and is used to indicate some additional detail at the bottom of the page. " \
-        "Do not include references in this determination. Output all the footnotes with their marker, and any footnote text found."
+        prompt = (
+            "Does this page contain footnotes? Ex. something you'd mark with a <sup> tag in html and is used to indicate some additional detail at the bottom of the page. "
+            "Do not include references in this determination. Output all the footnotes with their marker, and any footnote text found."
+        )
 
         response = client.beta.chat.completions.parse(
             model="gpt-5",
@@ -124,7 +128,11 @@ def check_for_footnotes(pdf_path: str, page_num: int, api_key: str) -> Optional[
         if has_footnotes:
             print(f"Found {len(footnotes)} footnote(s) in {pdf_path} page {page_num + 1}")
             for footnote in footnotes:
-                print(f"  - Marker: {footnote.marker}, Text: {footnote.text[:50]}..." if len(footnote.text) > 50 else f"  - Marker: {footnote.marker}, Text: {footnote.text}")
+                print(
+                    f"  - Marker: {footnote.marker}, Text: {footnote.text[:50]}..."
+                    if len(footnote.text) > 50
+                    else f"  - Marker: {footnote.marker}, Text: {footnote.text}"
+                )
 
         return has_footnotes
 

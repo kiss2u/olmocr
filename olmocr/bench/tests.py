@@ -260,32 +260,29 @@ class FormatTest(BasePDFTest):
         if self.format == "heading":
             # Markdown headings (# through ######)
             heading_patterns = [
-                r'^#{1,6}\s+(.+?)$',  # Standard markdown headings
+                r"^#{1,6}\s+(.+?)$",  # Standard markdown headings
             ]
             for pattern in heading_patterns:
                 matches = re.findall(pattern, original_content, re.MULTILINE)
                 formatted_texts.extend(matches)
 
             # HTML headings (<h1> through <h6>)
-            html_heading_pattern = r'<h[1-6][^>]*>(.*?)</h[1-6]>'
+            html_heading_pattern = r"<h[1-6][^>]*>(.*?)</h[1-6]>"
             matches = re.findall(html_heading_pattern, original_content, re.IGNORECASE | re.DOTALL)
             formatted_texts.extend(matches)
 
         elif self.format == "bold":
             # Markdown bold patterns
             bold_patterns = [
-                r'\*\*(.*?)\*\*',  # **text**
-                r'__(.*?)__',      # __text__
+                r"\*\*(.*?)\*\*",  # **text**
+                r"__(.*?)__",  # __text__
             ]
             for pattern in bold_patterns:
                 matches = re.findall(pattern, original_content, re.DOTALL)
                 formatted_texts.extend(matches)
 
             # HTML bold patterns
-            html_bold_patterns = [
-                r'<b[^>]*>(.*?)</b>',         # <b>text</b>
-                r'<strong[^>]*>(.*?)</strong>' # <strong>text</strong>
-            ]
+            html_bold_patterns = [r"<b[^>]*>(.*?)</b>", r"<strong[^>]*>(.*?)</strong>"]  # <b>text</b>  # <strong>text</strong>
             for pattern in html_bold_patterns:
                 matches = re.findall(pattern, original_content, re.IGNORECASE | re.DOTALL)
                 formatted_texts.extend(matches)
@@ -294,18 +291,15 @@ class FormatTest(BasePDFTest):
             # Markdown italic patterns - be careful not to match bold
             # We need to match single * or _ that are not part of ** or __
             italic_patterns = [
-                r'(?<!\*)\*(?!\*)(.*?)(?<!\*)\*(?!\*)',  # *text* but not **text**
-                r'(?<!_)_(?!_)(.*?)(?<!_)_(?!_)',         # _text_ but not __text__
+                r"(?<!\*)\*(?!\*)(.*?)(?<!\*)\*(?!\*)",  # *text* but not **text**
+                r"(?<!_)_(?!_)(.*?)(?<!_)_(?!_)",  # _text_ but not __text__
             ]
             for pattern in italic_patterns:
                 matches = re.findall(pattern, original_content, re.DOTALL)
                 formatted_texts.extend(matches)
 
             # HTML italic patterns
-            html_italic_patterns = [
-                r'<i[^>]*>(.*?)</i>',       # <i>text</i>
-                r'<em[^>]*>(.*?)</em>'       # <em>text</em>
-            ]
+            html_italic_patterns = [r"<i[^>]*>(.*?)</i>", r"<em[^>]*>(.*?)</em>"]  # <i>text</i>  # <em>text</em>
             for pattern in html_italic_patterns:
                 matches = re.findall(pattern, original_content, re.IGNORECASE | re.DOTALL)
                 formatted_texts.extend(matches)
@@ -641,7 +635,7 @@ class FootnoteTest(BasePDFTest):
             raise ValidationError("marker field is required")
 
         # Validate marker doesn't contain whitespace
-        if ' ' in self.marker:
+        if " " in self.marker:
             raise ValidationError("Marker cannot contain whitespace")
 
         # Normalize the optional text fields
@@ -672,36 +666,21 @@ class FootnoteTest(BasePDFTest):
         # Check for markdown footnote reference [^marker] (but not definition [^marker]:)
         markdown_pattern = rf"\[\^{re.escape(self.marker)}\](?!:)"
         for match in re.finditer(markdown_pattern, md_content):
-            marker_positions.append({
-                'start': match.start(),
-                'end': match.end(),
-                'type': 'markdown'
-            })
+            marker_positions.append({"start": match.start(), "end": match.end(), "type": "markdown"})
 
         # Check for superscript HTML <sup>marker</sup>
         html_sup_pattern = rf"<sup[^>]*>{re.escape(self.marker)}</sup>"
         for match in re.finditer(html_sup_pattern, md_content, re.IGNORECASE):
-            marker_positions.append({
-                'start': match.start(),
-                'end': match.end(),
-                'type': 'html'
-            })
+            marker_positions.append({"start": match.start(), "end": match.end(), "type": "html"})
 
         # Check for Unicode superscript characters (for common digits)
-        superscript_map = {
-            '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴',
-            '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹'
-        }
+        superscript_map = {"0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴", "5": "⁵", "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹"}
 
         # Convert marker to superscript if all characters are digits
         if all(c in superscript_map for c in self.marker):
-            superscript_marker = ''.join(superscript_map[c] for c in self.marker)
+            superscript_marker = "".join(superscript_map[c] for c in self.marker)
             for match in re.finditer(re.escape(superscript_marker), md_content):
-                marker_positions.append({
-                    'start': match.start(),
-                    'end': match.end(),
-                    'type': 'unicode'
-                })
+                marker_positions.append({"start": match.start(), "end": match.end(), "type": "unicode"})
 
         # If no markers found at all, fail
         if not marker_positions:
@@ -714,7 +693,7 @@ class FootnoteTest(BasePDFTest):
         # Helper function to clean text for comparison (remove whitespace and non-alpha)
         def clean_for_comparison(text):
             # Remove all non-alphanumeric characters and normalize
-            return ''.join(c for c in normalize_text(text) if c.isalnum()).lower()
+            return "".join(c for c in normalize_text(text) if c.isalnum()).lower()
 
         # Check appears_before_marker if provided
         before_found = False if self.appears_before_marker else True
@@ -724,8 +703,8 @@ class FootnoteTest(BasePDFTest):
 
             for pos in marker_positions:
                 # Get text before this marker position
-                start_pos = max(0, pos['start'] - 200)  # Look back up to 200 chars
-                text_before = md_content[start_pos:pos['start']]
+                start_pos = max(0, pos["start"] - 200)  # Look back up to 200 chars
+                text_before = md_content[start_pos : pos["start"]]
 
                 # Clean the text before for comparison
                 clean_text_before = clean_for_comparison(text_before)
@@ -750,8 +729,8 @@ class FootnoteTest(BasePDFTest):
 
             for pos in marker_positions:
                 # Get text after this marker position
-                end_pos = min(len(md_content), pos['end'] + 200)  # Look ahead up to 200 chars
-                text_after = md_content[pos['end']:end_pos]
+                end_pos = min(len(md_content), pos["end"] + 200)  # Look ahead up to 200 chars
+                text_after = md_content[pos["end"] : end_pos]
 
                 # Clean the text after for comparison
                 clean_text_after = clean_for_comparison(text_after)

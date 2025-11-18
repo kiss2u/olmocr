@@ -16,17 +16,9 @@ from olmocr.data.renderpdf import (
 )
 from olmocr.prompts.anchor import get_anchor_text
 from olmocr.prompts.prompts import (
-    PageResponse,
-    build_finetuning_prompt,
     build_openai_silver_data_prompt,
-    build_openai_silver_data_prompt_v2,
-    build_openai_silver_data_prompt_v2_simple,
     build_openai_silver_data_prompt_v3_simple,
-    openai_response_format_schema,
 )
-from olmocr.data.renderpdf import render_pdf_to_base64png
-from olmocr.prompts.anchor import get_anchor_text
-from olmocr.prompts.prompts import build_openai_silver_data_prompt
 
 # Set up logger
 logger = logging.getLogger(__name__)
@@ -126,9 +118,9 @@ def run_gemini(
         assert response.candidates[0].finish_reason == types.FinishReason.STOP, "Finish reason was not STOP, likely a processing error or repetition failure"
 
         # Extract token counts from usage metadata
-        if hasattr(response, 'usage_metadata'):
-            input_tokens = getattr(response.usage_metadata, 'prompt_token_count', 0)
-            output_tokens = getattr(response.usage_metadata, 'candidates_token_count', 0)
+        if hasattr(response, "usage_metadata"):
+            input_tokens = getattr(response.usage_metadata, "prompt_token_count", 0)
+            output_tokens = getattr(response.usage_metadata, "candidates_token_count", 0)
             TOTAL_INPUT_TOKENS += input_tokens
             TOTAL_OUTPUT_TOKENS += output_tokens
 
@@ -136,7 +128,9 @@ def run_gemini(
         parsed = json.loads(result)
 
         # The json schema is slightly off with gemini vs chatgpt, so we don't verify it
-        logger.warning(f"[Before Return - JSON] Total Documents: {TOTAL_DOCUMENTS}, Total Input Tokens: {TOTAL_INPUT_TOKENS}, Total Output Tokens: {TOTAL_OUTPUT_TOKENS}")
+        logger.warning(
+            f"[Before Return - JSON] Total Documents: {TOTAL_DOCUMENTS}, Total Input Tokens: {TOTAL_INPUT_TOKENS}, Total Output Tokens: {TOTAL_OUTPUT_TOKENS}"
+        )
         return parsed["natural_text"]
     else:
         generation_config = types.GenerateContentConfig(
@@ -156,12 +150,14 @@ def run_gemini(
         assert response.candidates[0].finish_reason == types.FinishReason.STOP, "Finish reason was not STOP, likely a processing error or repetition failure"
 
         # Extract token counts from usage metadata
-        if hasattr(response, 'usage_metadata'):
-            input_tokens = getattr(response.usage_metadata, 'prompt_token_count', 0)
-            output_tokens = getattr(response.usage_metadata, 'candidates_token_count', 0)
+        if hasattr(response, "usage_metadata"):
+            input_tokens = getattr(response.usage_metadata, "prompt_token_count", 0)
+            output_tokens = getattr(response.usage_metadata, "candidates_token_count", 0)
             TOTAL_INPUT_TOKENS += input_tokens
             TOTAL_OUTPUT_TOKENS += output_tokens
 
         result = response.candidates[0].content.parts[0].text
-        logger.warning(f"[Before Return - Plain] Total Documents: {TOTAL_DOCUMENTS}, Total Input Tokens: {TOTAL_INPUT_TOKENS}, Total Output Tokens: {TOTAL_OUTPUT_TOKENS}")
+        logger.warning(
+            f"[Before Return - Plain] Total Documents: {TOTAL_DOCUMENTS}, Total Input Tokens: {TOTAL_INPUT_TOKENS}, Total Output Tokens: {TOTAL_OUTPUT_TOKENS}"
+        )
         return result

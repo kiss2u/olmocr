@@ -454,7 +454,7 @@ def compare_rendered_equations(reference: RenderedEquation, hypothesis: Rendered
 
     H, R = reference.spans, hypothesis.spans
 
-    # Filter out any whitespace only spans and remove whitespace from the spans 
+    # Filter out any whitespace only spans and remove whitespace from the spans
     H = [replace(span, text=normalize(span.text)) for span in H if normalize(span.text)]
     R = [replace(span, text=normalize(span.text)) for span in R if normalize(span.text)]
 

@@ -7,14 +7,17 @@ from olmocr.bench.prompts import (
     build_basic_prompt,
     build_openai_silver_data_prompt_no_document_anchoring,
 )
-from olmocr.data.renderpdf import render_pdf_to_base64png, get_png_dimensions_from_base64
+from olmocr.data.renderpdf import (
+    get_png_dimensions_from_base64,
+    render_pdf_to_base64png,
+)
 from olmocr.prompts.anchor import get_anchor_text
 from olmocr.prompts.prompts import (
     PageResponse,
     build_finetuning_prompt,
+    build_no_anchoring_v4_yaml_prompt,
     build_openai_silver_data_prompt,
     build_openai_silver_data_prompt_v3_simple,
-    build_no_anchoring_v4_yaml_prompt
 )
 
 

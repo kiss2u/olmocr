@@ -10,7 +10,7 @@ import re
 import subprocess
 import tempfile
 import uuid
-from collections import defaultdict, Counter
+from collections import Counter, defaultdict
 from typing import Dict, List
 
 import pypdf
@@ -20,11 +20,18 @@ from markdownify import SPACES, MarkdownConverter
 from playwright.async_api import async_playwright
 from syntok.segmenter import process
 from tqdm import tqdm
+from wordfreq import zipf_frequency
 
-from wordfreq import zipf_frequency, top_n_list
-
-
-from olmocr.bench.tests import TableTest, TestType, normalize_text, parse_html_tables, TextPresenceTest, BaselineTest, FormatTest, FootnoteTest
+from olmocr.bench.tests import (
+    BaselineTest,
+    FootnoteTest,
+    FormatTest,
+    TableTest,
+    TestType,
+    TextPresenceTest,
+    normalize_text,
+    parse_html_tables,
+)
 from olmocr.data.renderpdf import (
     get_png_dimensions_from_base64,
     render_pdf_to_base64png,
@@ -1057,7 +1064,7 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
 
     # Extract language from HTML metadata for wordfreq
     metadata = extract_html_metadata(html_content)
-    primary_language = metadata.get('primary_language', 'en')
+    primary_language = metadata.get("primary_language", "en")
 
     # Remove any HTML tables from the markdown content
     # Tables can persist in markdown as raw HTML and we want to exclude them
@@ -1162,11 +1169,11 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
     tokens = markdown_text.split()
 
     # Pattern for numbers: optional minus, digits, optional decimal point and more digits
-    number_pattern = re.compile(r'^-?\d+(?:\.\d+)?$')
+    number_pattern = re.compile(r"^-?\d+(?:\.\d+)?$")
 
     for token in tokens:
         # Strip common punctuation from ends
-        token_cleaned = token.strip('.,;:!?"\'()')
+        token_cleaned = token.strip(".,;:!?\"'()")
 
         if not token_cleaned:
             continue
@@ -1185,7 +1192,7 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
                 if token_lower not in word_rarities:
                     # Get Zipf frequency (0-8 scale, higher = more common)
                     # Use primary_language if it's a valid 2-letter code
-                    lang_code = primary_language if len(primary_language) == 2 else 'en'
+                    lang_code = primary_language if len(primary_language) == 2 else "en"
                     try:
                         zipf = zipf_frequency(token_lower, lang_code)
                         word_rarities[token_lower] = zipf
@@ -1255,7 +1262,7 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
                 id=test_data["id"],
                 type=test_data["type"],
                 text=test_data["text"],
-                max_diffs=test_data["max_diffs"]
+                max_diffs=test_data["max_diffs"],
             )
 
             # Run the test against the markdown content
@@ -1390,11 +1397,7 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
     format_tests = []
 
     # Define mapping from HTML tags to format types
-    format_tag_mapping = {
-        ("h1", "h2", "h3", "h4", "h5", "h6"): "heading",
-        ("b", "strong"): "bold",
-        ("i", "em"): "italic"
-    }
+    format_tag_mapping = {("h1", "h2", "h3", "h4", "h5", "h6"): "heading", ("b", "strong"): "bold", ("i", "em"): "italic"}
 
     # Parse the HTML to find formatted elements
     format_soup = BeautifulSoup(html_content, "html.parser")
@@ -1442,7 +1445,7 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
                         type=test_data["type"],
                         text=test_data["text"],
                         format=test_data["format"],
-                        max_diffs=test_data["max_diffs"]
+                        max_diffs=test_data["max_diffs"],
                     )
 
                     # Test against the markdown_content (not markdown_text)
@@ -1477,11 +1480,7 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
         marker_text = sup.get_text().strip()
 
         # Filter out markers that are unlikely to be footnote references
-        if not marker_text or not (
-            marker_text.isdigit()
-            or (len(marker_text) == 1 and marker_text.isalpha())
-            or marker_text in ['*', '†', '‡', '§', '¶']
-        ):
+        if not marker_text or not (marker_text.isdigit() or (len(marker_text) == 1 and marker_text.isalpha()) or marker_text in ["*", "†", "‡", "§", "¶"]):
             continue
 
         if marker_text not in marker_sup_map:
@@ -1535,11 +1534,11 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
                     found_sup = True
 
             # Process text before marker
-            preceding_text = ''.join(text_before_sup).strip()
+            preceding_text = "".join(text_before_sup).strip()
             if len(preceding_text) >= 10:
                 words = preceding_text.split()
                 if len(words) >= 2:
-                    last_words = ' '.join(words[-3:]) if len(words) >= 3 else ' '.join(words)
+                    last_words = " ".join(words[-3:]) if len(words) >= 3 else " ".join(words)
                 else:
                     last_words = preceding_text
                 candidate = normalize_text(last_words)
@@ -1547,35 +1546,32 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
                     before_text = candidate
 
             # Process text after marker
-            following_text = ''.join(text_after_sup).strip()
+            following_text = "".join(text_after_sup).strip()
             if len(following_text) >= 10:
                 words = following_text.split()
                 if len(words) >= 2:
-                    first_words = ' '.join(words[:3]) if len(words) >= 3 else ' '.join(words)
+                    first_words = " ".join(words[:3]) if len(words) >= 3 else " ".join(words)
                 else:
                     first_words = following_text[:50]
                 candidate = normalize_text(first_words)
                 if candidate and len(candidate) >= 5:
                     after_text = candidate
 
-            occurrences.append({
-                'before': before_text,
-                'after': after_text
-            })
+            occurrences.append({"before": before_text, "after": after_text})
 
         # Apply logic based on number of occurrences
         if len(occurrences) >= 2:
             # If marker exists 2+ times: use before from first, after from second
-            if occurrences[0]['before']:
-                test_data["appears_before_marker"] = occurrences[0]['before']
-            if occurrences[1]['after']:
-                test_data["appears_after_marker"] = occurrences[1]['after']
+            if occurrences[0]["before"]:
+                test_data["appears_before_marker"] = occurrences[0]["before"]
+            if occurrences[1]["after"]:
+                test_data["appears_after_marker"] = occurrences[1]["after"]
         elif len(occurrences) == 1:
             # If marker exists 1 time: prefer left text, then right text
-            if occurrences[0]['before']:
-                test_data["appears_before_marker"] = occurrences[0]['before']
-            elif occurrences[0]['after']:
-                test_data["appears_after_marker"] = occurrences[0]['after']
+            if occurrences[0]["before"]:
+                test_data["appears_before_marker"] = occurrences[0]["before"]
+            elif occurrences[0]["after"]:
+                test_data["appears_after_marker"] = occurrences[0]["after"]
             # If neither before nor after text exists, we'll just have the marker
 
         # Create test even if we only have the marker (no additional fields required)
@@ -1630,9 +1626,7 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
         if test.get("type") == TestType.FORMAT.value:
             # Only check the "text" field for format tests
             if "text" in test:
-                if (contains_alphanumeric(test["text"]) and
-                    not contains_latex(test["text"]) and
-                    not contains_unicode_super_or_subscripts(test["text"])):
+                if contains_alphanumeric(test["text"]) and not contains_latex(test["text"]) and not contains_unicode_super_or_subscripts(test["text"]):
                     filtered_tests.append(test)
             continue
 
@@ -1708,7 +1702,7 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
             id=baseline_test_data["id"],
             type=baseline_test_data["type"],
             max_repeats=baseline_test_data["max_repeats"],
-            check_disallowed_characters=True
+            check_disallowed_characters=True,
         )
 
         # Run the test with check_disallowed_characters=True

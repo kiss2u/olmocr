@@ -135,9 +135,7 @@ def _extract_markdown_from_pdf(
             md_path = page_result.get("md_content_path") or page_result.get("md_content_nohf_path")
 
             if not md_path:
-                raise RuntimeError(
-                    f"DotsOCR (prompt_mode={prompt_mode}) did not produce markdown output for page {page_num}"
-                )
+                raise RuntimeError(f"DotsOCR (prompt_mode={prompt_mode}) did not produce markdown output for page {page_num}")
 
             if not os.path.exists(md_path):
                 raise RuntimeError(f"DotsOCR reported markdown at '{md_path}', but the file does not exist")

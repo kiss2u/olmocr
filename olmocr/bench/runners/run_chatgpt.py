@@ -39,7 +39,7 @@ def run_chatgpt(
     model: str = "gpt-4o-2024-08-06",
     temperature: float = 0.1,
     target_longest_image_dim: int = 2048,
-    max_completion_tokens: int=10000,
+    max_completion_tokens: int = 10000,
     prompt_template: Literal["full", "full_no_document_anchoring", "basic", "finetune", "fullv2", "fullv2simple", "fullv3simple"] = "finetune",
     response_template: Literal["plain", "json"] = "json",
 ) -> str:
