@@ -1199,7 +1199,8 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
     word_rarities = {}  # Store Zipf frequencies for words
 
     # Split on whitespace and check each token
-    tokens = markdown_text.split()
+    # We use the clean set of sentences used in the order test creation, which have been line-by-line normalized
+    tokens = "\n".join(sentences).split()
 
     # Pattern for numbers: optional minus, digits, optional decimal point and more digits
     number_pattern = re.compile(r"^-?\d+(?:\.\d+)?$")

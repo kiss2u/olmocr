@@ -1040,3 +1040,96 @@ class TestMineTests(unittest.TestCase):
         for test in tests:
             if test["type"] == "order":
                 self.assertTrue(len([c for c in test["before"] if not c.isdigit()]) > 0)
+
+    def test_complex_markdown_formatting(self):
+        html = """
+<!DOCTYPE html>
+
+<html lang="en">
+<head><meta content="ac4a05db236c9eee46a49a9545c64ea84923b5b7" name="olmocr_git_commit"/>
+<meta charset="utf-8"/>
+<meta content="width=725, initial-scale=1.0" name="viewport"/>
+<title>Optimization Parameters, Kinetics and Mechanism of Naproxen Removal by Catalytic Wet Peroxide Oxidation with a Hybrid Iron-Based Magnetic Catalyst</title>
+</head>
+<body>
+<div class="header">
+<div class="logo-left">
+<div class="logo-icon"></div>
+<span class="logo-text">catalysts</span>
+</div>
+<div class="logo-right"></div>
+</div>
+<div class="article-type">Article</div>
+<h1>Optimization Parameters, Kinetics and Mechanism of Naproxen Removal by Catalytic Wet Peroxide Oxidation with a Hybrid Iron-Based Magnetic Catalyst</h1>
+<div class="authors">
+<strong>Ysabel Huaccallo-Aguilar</strong> <sup>1,2</sup>, <strong>Silvia Álvarez-Torrellas</strong> <sup>1</sup>, <strong>Marcos Larriba</strong> <sup>1</sup>, <strong>V. Ismael Águeda</strong> <sup>1</sup>, <strong>José Antonio Delgado</strong> <sup>1</sup>, <strong>Gabriel Ovejero</strong> <sup>1</sup> and <strong>Juan García</strong> <sup>1,</sup>*
+    </div>
+<div class="affiliations">
+<div class="affiliation">
+<sup>1</sup> Catalysis and Separation Processes Group, Chemical Engineering and Materials Department, Faculty of Chemistry, Complutense University, Avda. Complutense s/n, 28040 Madrid, Spain; Ysabelhu@ucm.es (Y.H.); satorrellas@ucm.es (S.Á.-T.); marcoslarriba@ucm.es (M.L.); viam@ucm.es (V.I.A.); jadeldo@ucm.es (J.A.D.); govejero@ucm.es (G.O.)
+        </div>
+<div class="affiliation">
+<sup>2</sup> Departamento de Ingeniería Química, Universidad Nacional de San Agustín, Av. Independencia s/n, Arequipa 04001, Peru
+        </div>
+<div class="affiliation">
+<sup>*</sup> Correspondence: jgarciar@ucm.es; Tel.: +34-913-945-207
+        </div>
+</div>
+<div class="metadata">
+        Received: 13 February 2019; Accepted: 15 March 2019; Published: 20 March 2019
+    </div>
+<div class="abstract-section">
+<span class="abstract-label">Abstract:</span> <span class="abstract-text">This work presents a study of the assessment of the operating parameters of the catalytic wet peroxide oxidation (CWPO) of naproxen (NAP) using magnetite/multi-walled carbon nanotubes (Fe<sub>3</sub>O<sub>4</sub>/MWCNTs) as a catalyst. The effect of pH, temperature, and H<sub>2</sub>O<sub>2</sub> dosage on CWPO process was evaluated by using the response surface model (RSM), allowing us to obtain an optimum NAP removal of 82% at the following operating conditions: pH = 5, T = 70 °C, [H<sub>2</sub>O<sub>2</sub>] = 1.5 mM, and [NAP] = 100 mg/L. Therefore, NAP degradation kinetics were revealed to follow a pseudo-second-order kinetic model, and an activation energy value of 4.75 kJ/mol was determined. Both considered as blank tests, showed no significant removal of the pollutant. Moreover, Fe<sub>3</sub>O<sub>4</sub>/MWCNTs material exhibited good recyclability along three consecutive cycles, finding an average NAP removal percentage close to 80% in each cycle of 3 h reaction time. In addition, the scavenging tests confirmed that the degradation of NAP was mainly governed by <sup>•</sup>OH radicals attack. Two reaction sequences were proposed for the degradation mechanism according to the detected byproducts. Finally, the versatility of the catalyst was evidenced in the treatment of different environmentally relevant aqueous matrices (wastewater treatment plant effluent (WWTP), surface water (SW), and a hospital wastewater (HW)) spiked with NAP, obtaining total organic carbon (TOC) removal efficiencies after 8 h in the following order: NAP-SW &gt; NAP-HW &gt; NAP-WWTP.</span>
+</div>
+<div class="keywords-section">
+<span class="keywords-label">Keywords:</span> <span class="keywords-text">CWPO; magnetic catalyst; naproxen; response surface methodology; wastewater</span>
+</div>
+<h2>1. Introduction</h2>
+<div class="body-text">
+        Pharmaceutical compounds are an important part of toxic materials in wastewater that are currently growing around the world [1]. They have been frequently detected in the aqueous medium, supposing a growing environmental problem for the scientific community. The excessive drug production demanded and consumed by humans and animals usually ends up in surface water [1], sewage effluents [2], groundwater [3], and even drinking water [4] due to the discharges from municipal wastewater treatment plants (WWTPs) [1], and consequently, these contaminants can lead to devastating effects on the environment [3,5]. Particularly, non-steroidal anti-inflammatory drugs
+    </div>
+<div class="footer">
+<div><i>Catalysts</i> <strong>2019</strong>, <i>9</i>, 287; doi:10.3390/catal9030287</div>
+<div>www.mdpi.com/journal/catalysts</div>
+</div>
+</body>
+</html>
+"""
+        tests = generate_tests_from_html(html, "0", 1, self.random_generator)
+        markdown = html_to_markdown_with_frontmatter(html)
+
+        for test in [test for test in tests if test["type"] == "present"]:
+            self.assertNotIn("**", test["text"])
+
+    def test_complex_formatting_two(self):
+        html = """
+<!DOCTYPE html>
+
+<html lang="en">
+<head><meta content="ac4a05db236c9eee46a49a9545c64ea84923b5b7" name="olmocr_git_commit"/>
+<meta charset="utf-8"/>
+<meta content="width=725, height=1025" name="viewport"/>
+<title>Political Symbolism and Censorship</title>
+</head>
+<body>
+<h1>Political Symbolism and Censorship:</h1>
+<div class="subtitle"><em>The Tree Climber</em> and <em>Al-Farafir</em> Revisited</div>
+<p class="author"><em>Dina Amin<sup>*</sup></em></p>
+<p>The period that followed the Egyptian Revolution of 1952 was euphoric with enthusiasm as the expectations of the population as well as that of the intelligentsia were soaring high. No sooner however, did the optimism escalate that it receded as Gamal Abdel Nasser<sup>1</sup> who started off as an advocate for freedom and democracy turned into a despot (at least from the point of view of a portion of the population). Attempts at criticism were met with censorship on all fronts. After a number of writers and artists were imprisoned for their political views, some writers opted to stay silent, some conformed and some went around censorship by using symbolism and metaphor.</p>
+<p>An art form that suffered tremendously from censorship was theatre and playwriting. While theatre in Egypt could have been debilitated by censorship throughout the 1960s, a decade that suffered greatly from the suppression of speech, it ironically flourished instead, largely due to the pervasive use of symbolism and metaphors by dramatists. How playwrights converted their skepticism about the failure of the revolution to fulfill its promises of democracy into covert criticism, I will try to examine. Taking <em>Ya Tali' al-Shagarah</em> (1962; published in English as <em>The Tree Climber</em>, 1966) by Tawfiq al-Hakim and <em>Al-Farafir</em> (Flipflap and His Master, 1964) by Yusuf Idris as projections of political discontent, I will argue that, while both use theatre of the absurd as a form, the two texts uphold political symbolism as <em>modus operandi</em> in their covert criticism of the regime.<sup>2</sup></p>
+<p>According to Abner Cohen in "Political Symbolism," the poetics of symbols lie in their ambiguity and multileveled connotations,</p>
+<blockquote>
+<p>It is the very essence and potency of symbols that they are ambiguous, referring to different meanings, and are not given to precise definition. The most dominant symbols are essentially bivocal, being rooted, on the one hand, in the human condition, in what may be called "selfhood," and on</p>
+</blockquote>
+<footer>
+<p class="footnote"><sup>*</sup> Associate Professor of Drama and Performance Studies in the Department of English Language and Literature, Faculty of Arts, Cairo University.</p>
+<p class="footnote"><em>Cairo Studies in English</em> (2019-Summer): https://cse.journals.ekb.eg/</p>
+<p class="page-number">26</p>
+</footer>
+</body>
+</html>
+"""
+        tests = generate_tests_from_html(html, "0", 1, self.random_generator)
+
+        for test in [test for test in tests if hasattr(test, "text")]:
+            self.assertNotIn("**", test["text"])

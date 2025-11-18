@@ -397,6 +397,5 @@ class TestSuperscriptSubscriptConversion(unittest.TestCase):
         self.assertIn("aₙ", result)
         self.assertIn("xⁿ", result)
 
-
 if __name__ == "__main__":
     unittest.main()
