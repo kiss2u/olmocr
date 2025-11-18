@@ -311,5 +311,193 @@ class TestFootnoteTestGeneration(unittest.TestCase):
                 self.assertNotIn("<sub>", test["text"])
                 self.assertNotIn("</sub>", test["text"])
 
+    def test_footnotes_footer_again(self):
+        html = """<!DOCTYPE html>
+
+<html lang="en">
+<head><meta content="dd47b244c4e5f53cbaf95c7a2464507c2182f2bb" name="olmocr_git_commit"/>
+<meta charset="utf-8"/>
+<meta content="width=724, initial-scale=1.0" name="viewport"/>
+<title>KPN Second Quarter 2017 Results</title>
+</head>
+<body>
+<header>
+<div class="logo"></div>
+<div class="press-release-info">
+<div class="label">Press release</div>
+<div class="date">26 July 2017</div>
+</div>
+</header>
+<main>
+<h1>Second Quarter 2017 Results</h1>
+<h2>Highlights</h2>
+<ul>
+<li>Fixed-mobile convergence continues to deliver strong results in Consumer
+                <ul>
+<li>More than 60% of KPN brand postpaid base in fixed-mobile bundles (Q2 2016: 51%)</li>
+<li>+8k broadband net adds, +25k IPTV net adds, and +9k postpaid net adds<sup>§</sup> driven by the high value KPN brand</li>
+<li>Postpaid ARPU stable at EUR 26, ARPU per household increased by 5.0% y-on-y to EUR 42</li>
+<li>Further improvement in customer satisfaction in Consumer; NPS +13 (Q2 2016: +9)</li>
+</ul>
+</li>
+<li>Progress with Business transformation
+                <ul>
+<li>SME: fixed-mobile bundling on track, +39k multi play net adds driven by uptake KPN ÉÉN; positioning for growth in IT through up- and cross-sell</li>
+<li>LE &amp; Corporate: focus on value in competitive mobile-only market; growth in IT related services, Internet of Things and Security</li>
+<li>Dedicated to further improve customer satisfaction in Business; NPS -6 (Q2 2016: -9)</li>
+</ul>
+</li>
+<li>Second wave Simplification program delivered ~EUR 65m run-rate savings by end Q2 2017</li>
+</ul>
+<h2>Key figures<sup>*</sup> (from continuing operations)</h2>
+<div class="table-header">Group financials (unaudited)</div>
+<div class="table-header">(in EUR m, unless stated otherwise)</div>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Q2 2017</th>
+<th>Q2 2016</th>
+<th>Δ y-on-y</th>
+<th>YTD 2017</th>
+<th>YTD 2016</th>
+<th>Δ y-on-y</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Revenues</td>
+<td>1,631</td>
+<td>1,676</td>
+<td>-2.7%</td>
+<td>3,279</td>
+<td>3,365</td>
+<td>-2.6%</td>
+</tr>
+<tr>
+<td><strong>Adjusted revenues**</strong></td>
+<td><strong>1,623</strong></td>
+<td><strong>1,676</strong></td>
+<td><strong>-3.2%</strong></td>
+<td><strong>3,271</strong></td>
+<td><strong>3,365</strong></td>
+<td><strong>-2.8%</strong></td>
+</tr>
+<tr>
+<td><strong>Adjusted revenues The Netherlands**</strong></td>
+<td><strong>1,485</strong></td>
+<td><strong>1,486</strong></td>
+<td><strong>-2.1%</strong></td>
+<td><strong>2,955</strong></td>
+<td><strong>2,989</strong></td>
+<td><strong>-1.8%</strong></td>
+</tr>
+<tr>
+<td>EBITDA</td>
+<td>587</td>
+<td>579</td>
+<td>1.4%</td>
+<td>1,143</td>
+<td>1,138</td>
+<td>0.4%</td>
+</tr>
+<tr>
+<td><strong>Adjusted EBITDA**</strong></td>
+<td><strong>601</strong></td>
+<td><strong>592</strong></td>
+<td><strong>1.5%</strong></td>
+<td><strong>1,185</strong></td>
+<td><strong>1,160</strong></td>
+<td><strong>2.2%</strong></td>
+</tr>
+<tr class="indent-row">
+<td>Adjusted EBITDA margin The Netherlands</td>
+<td>41.0%</td>
+<td>39.5%</td>
+<td>+150bps</td>
+<td>40.1%</td>
+<td>38.5%</td>
+<td>+160bps</td>
+</tr>
+<tr>
+<td>Operating profit (EBIT)</td>
+<td>232</td>
+<td>205</td>
+<td>13%</td>
+<td>433</td>
+<td>346</td>
+<td>25%</td>
+</tr>
+<tr>
+<td>Profit for the period (net profit)</td>
+<td>151</td>
+<td>162</td>
+<td>-18%</td>
+<td>283</td>
+<td>210</td>
+<td>35%</td>
+</tr>
+<tr>
+<td>Capex</td>
+<td>238</td>
+<td>312</td>
+<td>-24%</td>
+<td>504</td>
+<td>630</td>
+<td>-20%</td>
+</tr>
+<tr>
+<td><strong>Operating free cash flow</strong></td>
+<td><strong>363</strong></td>
+<td><strong>280</strong></td>
+<td><strong>30%</strong></td>
+<td><strong>681</strong></td>
+<td><strong>530</strong></td>
+<td><strong>28%</strong></td>
+</tr>
+<tr>
+<td><strong>Free cash flow</strong></td>
+<td><strong>296</strong></td>
+<td><strong>254</strong></td>
+<td><strong>17%</strong></td>
+<td><strong>331</strong></td>
+<td><strong>214</strong></td>
+<td><strong>55%</strong></td>
+</tr>
+</tbody>
+</table>
+<div class="footnote">* All non-IFRS terms are explained in the safe harbor section</div>
+<div class="footnote">** Adjusted revenues and adjusted EBITDA reconciliations to be found on page 8 and 9</div>
+<h2>Financial performance</h2>
+<div class="financial-performance">
+<ul>
+<li>Adjusted revenues for The Netherlands were 2.1% lower y-on-y in Q2 2017. Customer base growth and higher ARPU per household led to revenue growth in Consumer, but this was offset by lower Business and Wholesale revenues. Revenues in Business were impacted by migrations and rationalization, and price pressure in mobile, while Wholesale saw lower revenues from MVNOs and international traffic</li>
+<li>Adjusted EBITDA was 1.5% higher y-on-y in Q2 2017 due to improved operational efficiency as a result of simplification and lower subscriber retention and acquisition costs</li>
+<li>Operating profit increased by 13% y-on-y in Q2 2017 mainly driven by EUR 19m lower amortization charges. Net profit increased by 18% y-on-y to EUR 191m in Q2 2017</li>
+<li>Capex in H1 2017 was 20% lower y-on-y, mainly due to different intrayear phasing compared to last year</li>
+<li>Free cash flow (excl. TEFD dividend) of EUR 261m in H1 2017 was EUR 157m higher compared to the same period last year, mainly driven by lower Capex and less interest paid</li>
+</ul>
+</div>
+</main>
+<footer>
+<div class="footer-content">
+<div class="footnote"><sup>§</sup> Adjusted for 15k migration to Business</div>
+<div>KPN Management Report Q2 2017<span style="margin-left: 30px;">1</span></div>
+</div>
+</footer>
+</body>
+</html>"""
+
+        tests = generate_tests_from_html(
+                html,
+                self.pdf_id,
+                self.page_num,
+                self.random_gen,
+                False,
+         )
+        
+        print(tests)
+
+
 if __name__ == "__main__":
     unittest.main()

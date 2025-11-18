@@ -51,9 +51,6 @@ def normalize_text(md_content: str) -> str:
     # Normalize <br> and <br/> to newlines
     md_content = re.sub(r"<br/?>", " ", md_content)
 
-    # Normalize whitespace in the md_content
-    md_content = re.sub(r"\s+", " ", md_content)
-
     # Remove markdown bold formatting (** or __ for bold)
     md_content = re.sub(r"\*\*(.*?)\*\*", r"\1", md_content)
     md_content = re.sub(r"__(.*?)__", r"\1", md_content)
@@ -61,8 +58,14 @@ def normalize_text(md_content: str) -> str:
     md_content = re.sub(r"</?i>", "", md_content)  # Remove <i> tags if they exist
 
     # Remove markdown italics formatting (* or _ for italics)
-    md_content = re.sub(r"\*(.*?)\*", r"\1", md_content)
-    md_content = re.sub(r"_(.*?)_", r"\1", md_content)
+    # Logic: The dot (.) in regex matches any character EXCEPT a newline.
+    # This automatically prevents matching **start \n\n end**.
+    # We use group \1 to ensure we match matching pairs (**...** or __...__).
+    md_content = re.sub(r"(\*\*|__)(.*?)\1", r"\2", md_content)  # Bold
+    md_content = re.sub(r"(\*|_)(.*?)\1", r"\2", md_content)     # Italics
+
+    # Normalize whitespace in the md_content
+    md_content = re.sub(r"\s+", " ", md_content)
 
     # Convert down to a consistent unicode form, so é == e + accent, unicode forms
     md_content = unicodedata.normalize("NFC", md_content)

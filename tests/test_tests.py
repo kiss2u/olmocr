@@ -305,6 +305,30 @@ class TestTextOrderTest(unittest.TestCase):
         result, _ = test.run("A B A B")  # A comes before B, but B also comes before second A
         self.assertTrue(result)
 
+    def test_real_case_unicode(self):
+        text = """# Marketing Strategies in the Canadian Beef Sector
+
+Julieta Frank,
+
+Derek Brewin,
+
+and
+
+Maria José Patiño*
+
+*Paper presented at the NCCC-134 Conference on Applied Commodity Price Analysis,  
+Forecasting, and Market Risk Management  
+St. Louis, Missouri, April 18-19, 2011*
+
+*Copyright 2011 by Julieta Frank, Derek Brewin, and Maria José Patiño. All rights reserved.  
+Readers may make verbatim copies of this document for non-commercial purposes by any  
+means, provided that this copyright notice appears on all such copies.*
+
+* Julieta Frank (Julieta_Frank@umanitoba.ca) is an Assistant Professor, Derek Brewin is an Associate Professor, and Maria José Patiño is a graduate student in the Department of Agribusiness and Agricultural Economics at the University of Manitoba. The funding support of the Manitoba Rural Adaptation Council and the Solomon Sinclair Farm Management Institute are gratefully acknowledged."""
+
+        test = TextOrderTest(pdf="test.pdf", page=1, id="test_id", type=TestType.ORDER.value, before="Maria Jos\u00e9 Pati\u00f1o*", after="All rights reserved.", max_diffs=0)
+        result, _ = test.run(text)
+        self.assertTrue(result)
 
 class TestTableTest(unittest.TestCase):
     """Test the TableTest class"""

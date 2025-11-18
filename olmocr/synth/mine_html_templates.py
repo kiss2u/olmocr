@@ -29,6 +29,7 @@ from olmocr.bench.tests import (
     TableTest,
     TestType,
     TextPresenceTest,
+    TextOrderTest,
     normalize_text,
     parse_html_tables,
 )
@@ -1182,8 +1183,7 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
         if max_diffs > len(first_sentence) // 4 or max_diffs > len(second_sentence) // 4:
             continue
 
-        tests.append(
-            {
+        test_data = {
                 "pdf": pdf_filename,
                 "page": 1,
                 "id": f"{pdf_id}_order_{uuid.uuid4().hex[:8]}",
@@ -1192,9 +1192,21 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
                 "after": second_sentence,
                 "max_diffs": max_diffs,
             }
-        )
-        num_order_tests += 1
 
+        # Create test object to validate
+        try:
+            test_obj = TextOrderTest(**test_data)
+
+            # Run the test against the markdown content
+            passed, _ = test_obj.run(full_markdown_content)
+
+            if passed:
+                num_order_tests += 1
+                tests.append(test_data)
+        except Exception:
+            # Skip if test creation or validation fails
+            pass
+     
         if num_order_tests > 5:
             break
 
@@ -1307,7 +1319,7 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
             )
 
             # Run the test against the markdown content
-            passed, _ = test_obj.run(markdown_text)
+            passed, _ = test_obj.run(full_markdown_content)
 
             if passed:
                 tests.append(test_data)
