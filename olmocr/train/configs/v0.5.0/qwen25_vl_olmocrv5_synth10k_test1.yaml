@@ -99,7 +99,7 @@ training:
   max_grad_norm: 1.0
 
   # Torch compile settings
-  torch_compile: true
+  torch_compile: false
   torch_compile_backend: inductor
   torch_compile_mode: default
   torch_compile_fullgraph: false
