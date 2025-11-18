@@ -257,6 +257,59 @@ class TestFootnoteTestGeneration(unittest.TestCase):
         for test in [test for test in tests if test["type"] == "absent"]:
             self.assertNotEqual(test["text"], "Don't make an absense test")
 
+    def test_sup_tags_in_text(self):
+        """Test that sup/sub tags are preserved in markdown but not in generated test text fields"""
+        html = """
+<!DOCTYPE html>
+
+<html lang="en">
+<head><meta content="dd47b244c4e5f53cbaf95c7a2464507c2182f2bb" name="olmocr_git_commit"/>
+<meta charset="utf-8"/>
+<meta content="width=774, height=1024" name="viewport"/>
+<title>Management of Symptomatic Stenosis</title>
+</head>
+<body>
+<header>
+<span class="page-number">348</span>
+<span class="running-header">D. Barros Casas et al. / Arch Bronconeumol. 2013;9(8):345–354</span>
+</header>
+<p class="figure-caption"><strong>Figure 3.</strong> Flowchart for the management of symptomatic stenosis. (*) Radial incisions, balloon dilation and topical application of mitomycin.</p>
+<div class="two-column">
+<div class="column">
+<p>as an aid for other endoscopic techniques at various levels of the airway or as the sole technique in the case of simple, short stenoses that do not completely obstruct the airway lumen; this technique is well supported in the scientific literature.<sup>57</sup></p>
+<p>Laser is only useful in small, narrow lesions with a reduced vertical length and stable cartilaginous skeleton, although it is widely and generally used with equally good results and low risk in the case of larger lesions. The decannulation rate is high, surgical time is reduced, and hospital stay is short-term.<sup>58</sup> For web-like stenosis, there is a variation of the technique that involves making radial incisions with the laser or with the electrocautery knife at 3, 9 and 12 o'clock before dilating.<sup>58–59</sup></p>
+<p>The microdebrider has been shown to be effective in lesions with excessive granulation tissue.<sup>51–52</sup></p>
+<p>Stenting is indicated in patients who do not respond to endoscopic dilation and are not candidates for surgical resection. It is important to remember that the stents indicated for this type of lesion must be easy to remove; at present, silicone stents are the most widely used, although there are also reports of the use of coated AERO hybrid nitinol stents. These are self-expanding and can be removed, and do not require rigid bronchoscopy for implantation.<sup>43,45</sup> Loss of cartilaginous support in the absence of extrinsic compression leads to migration of stents located in the subglottic region or proximal trachea. In these cases, external percutaneous fixation may be considered. Potential complications include skin infections around the external button.<sup>46,47</sup> Re-stenosis as a result of the repair process itself and stent obstruction are the main reasons for re-intervention.<sup>29,32</sup></p>
+<p>The use of topical mitomycin is controversial, but together with radial laser incisions and balloon dilation it has some beneficial effect compared to placebo at 2–3 years<sup>60–62</sup> (Fig. 3).</p>
+<p>Subglottic stenosis, mainly caused by intubation, deserves a special mention. The subglottic space refers to the section of the airway between the vocal cords and the lower traction of the cricoid cartilage, which is the narrowest section of the larynx and the only one surrounded by a complete ring of cartilage. Its narrow diameter, inconvenient location, surrounding tissue fragility of the coating mucosa and the tendency to form granulation tissue and scars from intubation, re-stenosis and failure to decannulate.<sup>51</sup> An incidence of subglottic stenosis secondary to prolonged intubation in children and adults ranging from 0.9% to 8.3% has been reported.<sup>52</sup> Management is a challenge involving various strategies that must be tailored to suit each patient. For non-concentric soft, membranous stenoses with sufficient cartilaginous support and a length of</p>
+</div>
+<div class="column">
+<p>around one centimeter corresponding to Cotton-Meyer grades I and II, endoscopic techniques described above are used, with emphasis on the use of laser. The success rate is variable according to the literature, ranging between 40% and 94%.<sup>53</sup> Longer, hard, grade III and IV complex stenoses can be treated initially with endoscopic techniques, but in most cases, open reconstructive surgery will be required (surgical resection of the stenosed section, including several tracheal rings and the anterior cricoid ring, in addition to the lower half of the mucosa of the cricoid cartilage, followed by end-to-end anastomosis).<sup>54,54</sup></p>
+<h2>Dynamic Airway Obstruction: Tracheobronchomalacia and Excessive Pars Membranacea Collapse</h2>
+<p>TBM and excessive pars membranacea collapse occur in around 12% of patients with respiratory diseases.<sub>55</sub> In TBM, the proportion between cartilage and soft tissues is reduced from a normal ratio of 4:1 to 1:1.<sup>56</sup> While in excessive pars membranacea collapse, there is atrophy and a loss of myoelastic fibers.<sup>57</sup> TBM, in both its local and diffuse forms, can affect the trachea, bronchi or both structures. There are different ways of classifying the disease, but the functional classification (FEMOS) is the most comprehensive.<sup>58</sup> TBM may be asymptomatic, although it often produces cough, wheezing, stridor, dyspnea, recurrent infections, and on occasions, respiratory failure,<sup>59</sup> and therefore differential diagnosis is needed to rule out disease entities such as chronic obstructive pulmonary disease, asthma and bronchiectasis.<sup>61</sup> Respiratory function tests can help in the diagnosis of concomitant obstructive pulmonary disease, but they have limited application in the diagnosis of TBM, since results are normal in up to 21% of cases.<sup>62</sup> Accordingly, dynamic chest tomography and dynamic flexible bronchoscopy are often required for diagnosis.<sup>63,64</sup> (Fig. 1, image 3). This disease can be easily diagnosed by the performance of dynamic inhalation and exhalation maneuvers. In patients with diffuse TBM, a diagnostic test must be performed with silicone stent placement,<sup>65–67</sup> along with management of comorbidities. Patients who show improvement in their symptoms and respiratory function will be candidates for surgical or medical reconstruction by tracheobronchoplasty.<sup>55</sup> Patients who cannot undergo surgery due to their comorbidities, will be managed with a combination of symptomatic treatment and possible definitive stenting (Fig. 4).</p>
+<p>Although non-invasive ventilation has been proposed as a possible treatment for TBM, its role appears to be restricted to the</p>
+</div>
+</div>
+</body>
+</html>"""
+
+        tests = generate_tests_from_html(
+                html,
+                self.pdf_id,
+                self.page_num,
+                self.random_gen,
+                False,
+         )
+
+        # Check that tests containing sup/sub tags are filtered out
+        # The test generation should filter these out already
+        for test in tests:
+            if "text" in test:
+                # These tags should have been filtered out during test generation
+                self.assertNotIn("<sup>", test["text"])
+                self.assertNotIn("</sup>", test["text"])
+                self.assertNotIn("<sub>", test["text"])
+                self.assertNotIn("</sub>", test["text"])
 
 if __name__ == "__main__":
     unittest.main()

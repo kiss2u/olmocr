@@ -1131,5 +1131,5 @@ class TestMineTests(unittest.TestCase):
 """
         tests = generate_tests_from_html(html, "0", 1, self.random_generator)
 
-        for test in [test for test in tests if hasattr(test, "text")]:
+        for test in [test for test in tests if "text" in test]:
             self.assertNotIn("**", test["text"])

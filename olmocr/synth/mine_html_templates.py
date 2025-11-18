@@ -1653,6 +1653,12 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
 
         return any(c in superscript_chars or c in subscript_chars for c in value)
 
+    def contains_html_sup_sub_tags(value):
+        if not isinstance(value, str):
+            return False
+        # Check for HTML sup/sub tags
+        return "<sup>" in value or "</sup>" in value or "<sub>" in value or "</sub>" in value
+
     filtered_tests = []
     for test in tests:
         # Math tests should not be filtered for LaTeX content
@@ -1683,7 +1689,7 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
                 filtered_tests.append(test)
             continue
 
-        # Check all text fields in the test for alphanumeric content, LaTeX, and Unicode super/subscripts
+        # Check all text fields in the test for alphanumeric content, LaTeX, Unicode super/subscripts, and HTML tags
         all_valid = True
         for field in text_fields:
             if field in test:
@@ -1697,6 +1703,10 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
                     break
                 # Skip test if field contains Unicode super or subscripts
                 if contains_unicode_super_or_subscripts(test[field]):
+                    all_valid = False
+                    break
+                # Skip test if field contains HTML sup/sub tags
+                if contains_html_sup_sub_tags(test[field]):
                     all_valid = False
                     break
         if all_valid:
