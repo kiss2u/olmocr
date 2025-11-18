@@ -167,6 +167,96 @@ class TestFootnoteTestGeneration(unittest.TestCase):
             ),
         )
 
+    def test_footnotes_in_footer(self):
+        # Sometimes footnotes appear in a <footer> tag, and we like to remove text from footer tags and adjust how things work with it
+        # So the idea here is to test that
+        html_content = """
+<!DOCTYPE html>
+
+<html lang="en">
+<head><meta content="ac4a05db236c9eee46a49a9545c64ea84923b5b7" name="olmocr_git_commit"/>
+<meta charset="utf-8"/>
+<meta content="width=725, height=1024" name="viewport"/>
+<title>9.3 Principles of Lagrangian construction</title>
+</head>
+<body>
+<header>
+<span class="section-title">9.3 Principles of Lagrangian construction</span>
+<span class="page-number">133</span>
+</header>
+<h3>9.3.2 A worked-out example: Vector and tensor fields</h3>
+<p>
+        The previous analysis can be easily extended to other types of fields. Consider for instance a vector field $A_\mu$ and a tensor field $B_{\mu\nu}$. What is the most general Lagrangian $\mathcal{L}(A, \partial A, B, \partial B)$ that can be constructed out of these two fields? To clarify the procedure, let me split the problem into several pieces
+    </p>
+<footer>
+<div class="footnote">
+<sup>3</sup>Quadratic actions give rise to linear equations of motion, where the superposition principle can be applied.
+        </div>
+<div class="footnote">
+<sup>4</sup>In the same way that <i>physically</i> cannot be attributed to $\mathcal{L}$, we cannot make any claim about the physicality of $A_\mu$. Physicality might be attributed to the set $\{A_\mu\}$ of gauge-equivalent 4-potentials or to any gauge invariant attribute of that set, but not to its individual elements.
+        </div>
+<div class="footnote">
+<sup>5</sup>It cannot be compensated by the transformation of the other (derivative) terms.
+        </div>
+</footer>
+</body>
+</html>
+"""
+        footnote_tests = self._generate_footnote_tests(html_content)
+
+        print(footnote_tests)
+
+        self.assertEqual(len(footnote_tests), 3)
+
+    def test_footnotes_in_footer_ptags(self):
+        # Sometimes footnotes appear in a <footer> tag, and we like to remove text from footer tags and adjust how things work with it
+        # So the idea here is to test that
+        html_content = """
+<!DOCTYPE html>
+
+<html lang="en">
+<head><meta content="ac4a05db236c9eee46a49a9545c64ea84923b5b7" name="olmocr_git_commit"/>
+<meta charset="utf-8"/>
+<meta content="width=725, height=1024" name="viewport"/>
+<title>9.3 Principles of Lagrangian construction</title>
+</head>
+<body>
+<header>
+<span class="section-title">9.3 Principles of Lagrangian construction</span>
+<span class="page-number">133</span>
+</header>
+<h3>9.3.2 A worked-out example: Vector and tensor fields</h3>
+<p>
+        The previous analysis can be easily extended to other types of fields. Consider for instance a vector field $A_\mu$ and a tensor field $B_{\mu\nu}$. What is the most general Lagrangian $\mathcal{L}(A, \partial A, B, \partial B)$ that can be constructed out of these two fields? To clarify the procedure, let me split the problem into several pieces
+    </p>
+<footer>
+<p class="footnote">
+<sup>3</sup>Quadratic actions give rise to linear equations of motion, where the superposition principle can be applied.
+        </p>
+<p class="footnote">
+<sup>4</sup>In the same way that <i>physically</i> cannot be attributed to $\mathcal{L}$, we cannot make any claim about the physicality of $A_\mu$. Physicality might be attributed to the set $\{A_\mu\}$ of gauge-equivalent 4-potentials or to any gauge invariant attribute of that set, but not to its individual elements.
+        </p>
+<p class="footnote">
+<sup>5</sup>It cannot be compensated by the transformation of the other (derivative) terms.
+        </p>
+        <p class="footnote">Don't make an absense test</p>
+</footer>
+</body>
+</html>
+"""
+        tests = generate_tests_from_html(
+            html_content,
+            self.pdf_id,
+            self.page_num,
+            self.random_gen,
+            False,
+        )
+
+        self.assertEqual(len([test for test in tests if test["type"] == "footnote"]), 3)        
+
+        for test in [test for test in tests if test["type"] == "absent"]:
+            self.assertNotEqual(test["text"], "Don't make an absense test")
+
 
 if __name__ == "__main__":
     unittest.main()

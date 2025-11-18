@@ -215,6 +215,33 @@ def download_s3_pdf(path, local_path):
         return False
 
 
+def cleanup_headers_footers_soup(soup):
+    # Remove headers completely
+    for header in soup.find_all("header"):
+        header.decompose()
+
+    # For footers: remove direct text but keep footnote elements
+    for footer in soup.find_all("footer"):
+        # First, preserve all footnote elements (div, span, p with class="footnote")
+        footnote_elements = []
+        for tag_type in ["div", "span", "p"]:
+            footnote_elements.extend(footer.find_all(tag_type, class_="footnote"))
+
+        # Extract and temporarily store footnote elements
+        preserved_elements = []
+        for fn_element in footnote_elements:
+            # Extract the element from its current position
+            fn_element.extract()
+            preserved_elements.append(fn_element)
+
+        # Clear all content from the footer
+        footer.clear()
+
+        # Re-add only the footnote elements back to the footer
+        for fn_element in preserved_elements:
+            footer.append(fn_element)
+
+
 class PreserveTablesConverter(MarkdownConverter):
     """
     Custom MarkdownConverter that preserves HTML tables unchanged
@@ -310,10 +337,7 @@ def html_to_markdown_with_frontmatter(html_content):
         body_soup = soup
 
     # First, remove all header and footer elements from the body
-    for header in body_soup.find_all("header"):
-        header.decompose()
-    for footer in body_soup.find_all("footer"):
-        footer.decompose()
+    cleanup_headers_footers_soup(body_soup)
 
     # Also remove divs with page-header or page-footer classes (in case they weren't converted to header/footer tags)
     for div in body_soup.find_all("div", class_="page-header"):
@@ -1465,10 +1489,7 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
 
     # Parse the HTML to find footnotes (without converting superscripts)
     footnote_soup = BeautifulSoup(html_content, "html.parser")
-
-    # Remove headers and footers from footnote soup
-    for element in footnote_soup.find_all(["header", "footer"]):
-        element.decompose()
+    cleanup_headers_footers_soup(footnote_soup)
 
     # Look for superscript elements that might be footnote markers
     sup_elements = footnote_soup.find_all("sup")
