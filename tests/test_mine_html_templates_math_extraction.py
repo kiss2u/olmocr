@@ -204,6 +204,25 @@ class TestMathExtraction(unittest.TestCase):
         # The equation should be stripped of leading/trailing whitespace
         self.assertEqual(math_tests[0]["math"].strip(), math_tests[0]["math"])
 
+    def test_math_not_in_present_tests(self):
+        """Test that extracted math equations have whitespace properly stripped"""
+        html_content = """
+        <html>
+        <body>
+        <p>\\[x = y + z \\mathcal{x} \\]</p>
+
+        <p>\\[y = x + z  \\mathcal{x}  \\]</p>
+
+        <p>\\[q = r + z  \\mathcal{x}  \\]</p>
+        </body>
+        </html>
+        """
+
+        tests = generate_tests_from_html(html_content, "test_pdf", 1, self.random_generator)
+        present_tests = [t for t in tests if t.get("type") == "present"]
+        self.assertTrue(len(present_tests) == 0)
+
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1085,7 +1085,7 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
 
     # Step 3: Generate TextPresenceTests and OrderingTests from markdown content
     # Convert HTML to markdown to get cleaner text for presence and ordering tests
-    markdown_content = html_to_markdown_with_frontmatter(html_content)
+    full_markdown_content = html_to_markdown_with_frontmatter(html_content)
 
     # Extract language from HTML metadata for wordfreq
     metadata = extract_html_metadata(html_content)
@@ -1093,10 +1093,18 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
 
     # Remove any HTML tables from the markdown content
     # Tables can persist in markdown as raw HTML and we want to exclude them
-    markdown_content = re.sub(r"<table[^>]*>.*?</table>", "", markdown_content, flags=re.DOTALL | re.IGNORECASE)
+    stripped_markdown_content = re.sub(r"<table[^>]*>.*?</table>", "", full_markdown_content, flags=re.DOTALL | re.IGNORECASE)
+
+    # Remove math equations from this markdown content
+    # Remove $$...$$ blocks (display math)
+    stripped_markdown_content = re.sub(r"\$\$.*?\$\$", "", stripped_markdown_content, flags=re.DOTALL)
+    # Remove \[...\] blocks (display math)
+    stripped_markdown_content = re.sub(r"\\\[.*?\\\]", "", stripped_markdown_content, flags=re.DOTALL)
+    # Remove \(...\) blocks (inline math)
+    stripped_markdown_content = re.sub(r"\\\(.*?\\\)", "", stripped_markdown_content, flags=re.DOTALL)
 
     # Extract just the content part (after frontmatter)
-    markdown_lines = markdown_content.split("\n")
+    markdown_lines = stripped_markdown_content.split("\n")
     content_start_idx = 0
 
     # Skip frontmatter if present
@@ -1388,7 +1396,7 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
 
     math_equations = []
     for pattern, flags in math_patterns:
-        matches = re.findall(pattern, markdown_content, flags)
+        matches = re.findall(pattern, full_markdown_content, flags)
         for match in matches:
             # Clean up the match - remove extra whitespace and newlines
             equation = match.strip()
@@ -1473,8 +1481,8 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
                         max_diffs=test_data["max_diffs"],
                     )
 
-                    # Test against the markdown_content (not markdown_text)
-                    passed, _ = test_obj.run(markdown_content)
+                    # Test against the markdown_content
+                    passed, _ = test_obj.run(full_markdown_content)
 
                     if passed:
                         format_tests.append(test_data)
@@ -1599,7 +1607,7 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
         # Create test even if we only have the marker (no additional fields required)
         try:
             test_obj = FootnoteTest(**test_data)
-            passed, _ = test_obj.run(markdown_content)
+            passed, _ = test_obj.run(full_markdown_content)
             if passed:
                 footnote_tests.append(test_data)
         except Exception:
@@ -1728,7 +1736,7 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
         )
 
         # Run the test with check_disallowed_characters=True
-        passed, explanation = baseline_test_obj.run(markdown_content)
+        passed, explanation = baseline_test_obj.run(full_markdown_content)
 
         # If it failed due to disallowed characters, set check_disallowed_characters=False
         if not passed and "disallowed characters" in explanation:
