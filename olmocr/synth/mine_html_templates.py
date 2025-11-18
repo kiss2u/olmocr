@@ -245,6 +245,7 @@ def cleanup_headers_footers_soup(soup):
 class PreserveTablesConverter(MarkdownConverter):
     """
     Custom MarkdownConverter that preserves HTML tables unchanged
+    and preserves sup/sub tags as HTML
     """
 
     def convert_table(self, el, text, parent_tags):
@@ -255,6 +256,14 @@ class PreserveTablesConverter(MarkdownConverter):
         # Create a temporary soup with just this element to get its HTML
         temp_soup = BeautifulSoup(str(el), "html.parser")
         return str(temp_soup.table) if temp_soup.table else str(el)
+
+    def convert_sup(self, el, text, parent_tags):
+        # Always preserve sup tags as HTML
+        return f'<sup>{el.get_text()}</sup>'
+
+    def convert_sub(self, el, text, parent_tags):
+        # Always preserve sub tags as HTML
+        return f'<sub>{el.get_text()}</sub>'
 
 
 def extract_html_metadata(html_content):
@@ -351,9 +360,6 @@ def html_to_markdown_with_frontmatter(html_content):
         # Create an img tag with placeholder src and appropriate alt text
         img_tag = body_soup.new_tag("img", src="page.png", alt=alt_text)
         img_div.replace_with(img_tag)
-
-    # Convert superscripts and subscripts to Unicode before markdown conversion
-    convert_superscripts_subscripts(body_soup)
 
     # Get the modified HTML (only body content)
     modified_html = str(body_soup)
