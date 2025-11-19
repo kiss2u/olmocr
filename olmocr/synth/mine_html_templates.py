@@ -708,6 +708,61 @@ async def generate_html_from_image(client, image_base64):
     except Exception as e:
         print(f"Error calling Claude API: {e}")
         return None
+    
+
+async def densify_html(client, html_content):
+    """Call Claude API to generate HTML from an image using a multi-step prompting strategy."""
+    global total_input_tokens, total_output_tokens
+   
+    try:
+        dense_response = await claude_stream(
+            client,
+            model="claude-sonnet-4-5-20250929",
+            max_tokens=50000,
+            temperature=0.7,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": html_content
+                        },
+
+
+                        {
+                            "type": "text",
+                            "text": "The HTML above describes a webpage meant to render into a single printed PDF page. Please output a new full synthetic webpage that increases the amount of information on this page by 2X. "
+                            "Your goal is to shrink the font size and add more synthetic content so that the general idea and structure of the page is preserved, but so that it contains twice as many final tokens. "
+                            "Be careful to adjust any elements (such as footers) so that they will not overlap the main body of the newly expanded document. "
+                            "But remember that it still needs to render as a single static HTML page that will print out to ONE page on a printer or in PDF form. "
+                            "Output the complete revised HTML in a ```html code block."
+                        },
+                    ],
+                }
+            ],
+        )
+
+        dense_html_text = ""
+        for content in dense_response.content:
+            if content.type == "text":
+                dense_html_text += content.text
+
+        # Track token usage from refinement API call
+        if hasattr(dense_response, "usage"):
+            total_input_tokens += dense_response.usage.input_tokens
+            total_output_tokens += dense_response.usage.output_tokens
+
+        dense_html = extract_code_block(dense_html_text)
+        if not dense_html:
+            print("Warning: No HTML code block found in densifying response")
+            return None
+        
+        return dense_html
+
+    except Exception as e:
+        print(f"Error calling Claude API: {e}")
+        return None    
 
 
 def extract_page_from_pdf(input_path, output_path, page_num):
@@ -1851,6 +1906,13 @@ async def process_pdf(pdf_info, args, client, pdf_filter=None):
             print(f"Failed to generate HTML for {pdf_path}, page {page_num}")
             return None
 
+        if args.densify:
+            html_content = await densify_html(client, html_content)
+
+            if not html_content:
+                print(f"Failed to densify HTML for {pdf_path}, page {page_num}")
+                return None
+
         # Add git commit meta tag if available
         git_commit = get_git_commit_hash()
         if git_commit:
@@ -1999,6 +2061,7 @@ async def main():
     parser.add_argument("--parallel", type=int, default=1, help="Number of parallel tasks to use")
     parser.add_argument("--api_key", help="Claude API key (or set ANTHROPIC_API_KEY environment variable)")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose output including table test verification")
+    parser.add_argument("--densify", action="store_true", help="Set to ask claude to double the density of information on this page synthetically")
     parser.add_argument("--filter", action="store_true", help="Apply PDF filtering to remove forms, spam, and non-English content")
     parser.add_argument("--name", default="synthetic", help="Name for the output JSONL file and subfolder (default: synthetic)")
     args = parser.parse_args()
