@@ -403,6 +403,170 @@ class TestSuperscriptSubscriptConversion(unittest.TestCase):
 
         self.assertIn("<sup>wow</sup>", result)
 
+    def test_line_numbers_markdown(self):
+        html = """
+<!DOCTYPE html>
+
+<html lang="en">
+<head><meta content="d1fdb60869ea7e1e0c48228f80477b67661e7654" name="olmocr_git_commit"/>
+<meta charset="utf-8"/>
+<meta content="width=792, height=1024" name="viewport"/>
+<title>bioRxiv preprint</title>
+</head>
+<body>
+<header>
+        bioRxiv preprint doi: <a href="https://doi.org/10.1101/2020.10.16.342121">https://doi.org/10.1101/2020.10.16.342121</a>; this version posted October 19, 2020. The copyright holder for this preprint<br/>
+        (which was not certified by peer review) is the author/funder. All rights reserved. No reuse allowed without permission.
+    </header>
+<div class="content">
+<div class="line">
+<div class="line-number">67</div>
+<div class="line-text">to IIA site (Atukeren, Aydin, Uslu, Gumustas, &amp; Cakatay, 2010), however, IIIA site was also</div>
+</div>
+<div class="line">
+<div class="line-number">68</div>
+<div class="line-text">considered (Suji et al., 2008).</div>
+</div>
+<div class="line">
+<div class="line-number">69</div>
+<div class="line-text">Having in mind that DHLA is a very potent antioxidant and its use can alleviate a number of</div>
+</div>
+<div class="line">
+<div class="line-number">70</div>
+<div class="line-text">conditions related to oxidative stress, it seemed relevant to elucidate its mode of interaction with</div>
+</div>
+<div class="line">
+<div class="line-number">71</div>
+<div class="line-text">HSA, a universal transporter in the circulation. The properties of this interaction, are still</div>
+</div>
+<div class="line">
+<div class="line-number">72</div>
+<div class="line-text">unknown and undefined, so the present study aimed to investigate characteristics of the DHLA-</div>
+</div>
+<div class="line">
+<div class="line-number">73</div>
+<div class="line-text">HSA binding in detail, by using spectroscopic and molecular docking approach.</div>
+</div>
+<div class="line">
+<div class="line-number">74</div>
+<div class="line-text"></div>
+</div>
+<div class="section-heading">MATERIALS AND METHODS</div>
+<div class="line">
+<div class="line-number">75</div>
+<div class="line-text"><h2>Materials</h2></div>
+</div>
+<div class="line">
+<div class="line-number">76</div>
+<div class="line-text">All chemicals used were of analytical grade and were purchased from Sigma (Burlington,</div>
+</div>
+<div class="line">
+<div class="line-number">77</div>
+<div class="line-text">Massachusetts, USA). Stock solution of HSA, purchased from Sigma (A-1653) and used without</div>
+</div>
+<div class="line">
+<div class="line-number">78</div>
+<div class="line-text">additional purification, was made by dissolving HSA in 10 mM PBS, pH 7.4. The concentration</div>
+</div>
+<div class="line">
+<div class="line-number">79</div>
+<div class="line-text">of HSA was determined by using bicinchoninic acid (BCA) assay kit (Thermo Fisher Scientific,</div>
+</div>
+<div class="line">
+<div class="line-number">80</div>
+<div class="line-text">Waltham, Massachusetts, USA). Stock solution (5 mM) of DHLA was prepared by suspending</div>
+</div>
+<div class="line">
+<div class="line-number">81</div>
+<div class="line-text">DHLA in 10 mM PBS and then adding a small volume of 1 M NaOH until full clarification of</div>
+</div>
+<div class="line">
+<div class="line-number">82</div>
+<div class="line-text">solution was reached (Perricone et al., 1999). Trypsin was purchased from the Institute Torlak</div>
+</div>
+<div class="line">
+<div class="line-number">83</div>
+<div class="line-text">(Belgrade, Serbia) as a 0.25 % solution. All experiments were performed in triplicate at room</div>
+</div>
+<div class="line">
+<div class="line-number">84</div>
+<div class="line-text">temperature, using 10 mM PBS, pH 7.4, unless otherwise stated.</div>
+</div>
+<div class="line">
+<div class="line-number">85</div>
+<div class="line-text"><h2>Spectrofluorometric analysis of HSA-DHLA complex formation</h2></div>
+</div>
+<div class="line">
+<div class="line-number">86</div>
+<div class="line-text">Binding constant (Ka) of HSA-DHLA complex was determined by recording the quenching of</div>
+</div>
+<div class="line">
+<div class="line-number">87</div>
+<div class="line-text">intrinsic fluorescence emission of HSA (0.4 μM) in the presence of increasing concentrations of</div>
+</div>
+<div class="line">
+<div class="line-number">88</div>
+<div class="line-text">DHLA (from 4 to 35 μM) at 37 °C. Fluorescence spectra were recorded using FluoroMax®-4</div>
+</div>
+<div class="line">
+<div class="line-number">89</div>
+<div class="line-text">spectrofluorometer (Horiba Scientific, Japan). HSA was excited at 280 nm and emission spectra</div>
+</div>
+<div class="line">
+<div class="line-number">90</div>
+<div class="line-text">were recorded in the range from 290 to 450 nm. Each spectrum was corrected for the emission of</div>
+</div>
+<div class="line">
+<div class="line-number">91</div>
+<div class="line-text">the control that contained only DHLA at particular concentration. The change of the emission</div>
+</div>
+<div class="line">
+<div class="line-number">92</div>
+<div class="line-text">intensity at 338 nm (HSA emission maximum) was used for the calculation of the binding</div>
+</div>
+<div class="line">
+<div class="line-number">93</div>
+<div class="line-text">constant. Emission intensity measured for HSA was first corrected for the small inner filter effect</div>
+</div>
+<div class="line">
+<div class="line-number">94</div>
+<div class="line-text">of DHLA using the equation:</div>
+</div>
+<div class="line">
+<div class="line-number">95</div>
+<div class="line-text">
+<div class="equation">F<sub>c</sub> = F<sub>0</sub> × 10<sup>(Aex+Aem)/2</sup></div>
+</div>
+</div>
+<div class="line">
+<div class="line-number">96</div>
+<div class="line-text">where Fc is corrected fluorescence, F<sub>0</sub> is measured fluorescence, Aex and Aem are absorbances</div>
+</div>
+<div class="line">
+<div class="line-number">97</div>
+<div class="line-text">at excitation and emission wavelengths which are 290 nm and 338 nm, respectively.</div>
+</div>
+<div class="line">
+<div class="line-number">98</div>
+<div class="line-text">Using corrected fluorescence, binding constant between HSA and DHLA was calculated using</div>
+</div>
+<div class="line">
+<div class="line-number">99</div>
+<div class="line-text">the following equation:</div>
+</div>
+</div>
+<footer>
+        3
+    </footer>
+</body>
+</html>"""
+
+        result = html_to_markdown_with_frontmatter(html)
+
+        self.assertNotIn("96", result)
+        self.assertNotIn("97", result)
+        self.assertNotIn("98", result)
+        self.assertNotIn("82", result)
 
 if __name__ == "__main__":
     unittest.main()

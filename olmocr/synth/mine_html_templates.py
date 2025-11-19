@@ -242,6 +242,10 @@ def cleanup_headers_footers_soup(soup):
         for fn_element in preserved_elements:
             footer.append(fn_element)
 
+    # Remove any divs or spans with class "line-number"
+    for element in soup.find_all(["div", "span"], class_="line-number"):
+        element.extract()
+
 
 class PreserveTablesConverter(MarkdownConverter):
     """
