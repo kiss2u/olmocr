@@ -246,6 +246,10 @@ def cleanup_headers_footers_soup(soup):
     for element in soup.find_all(["div", "span"], class_="line-number"):
         element.extract()
 
+    # Remove any div or span watermarks
+    for element in soup.find_all(["div", "span"], class_="watermark"):
+        element.extract()
+
 
 class PreserveTablesConverter(MarkdownConverter):
     """
@@ -1877,6 +1881,34 @@ async def process_pdf(pdf_info, args, client, pdf_filter=None):
         os.makedirs(bench_synthetic_dir, exist_ok=True)
         os.makedirs(claude_original_dir, exist_ok=True)
 
+        # Render PDF using Playwright 
+        playwright_pdf_path = None
+        render_success = False
+        playwright_pdf_filename = f"{pdf_id}_page{page_num}.pdf"  # This will be used in the tests
+
+        playwright_pdf_path = os.path.join(pdfs_dir, playwright_pdf_filename)
+
+        try:
+            # Get PNG dimensions
+            png_width, png_height = get_png_dimensions_from_base64(image_base64)
+
+            # Run the async function directly since we're already in an async context
+            render_success = await render_pdf_with_playwright(html_content, playwright_pdf_path, png_width, png_height)
+
+            if render_success:
+                print(f"Successfully rendered with Playwright: {playwright_pdf_path}")
+            else:
+                print(f"Failed to render as a single page PDF: {playwright_pdf_path}")
+                playwright_pdf_path = None
+        except Exception as e:
+            print(f"Failed to render with Playwright: {e}")
+            playwright_pdf_path = None
+            render_success = False
+
+        # If playwright rendering failed and was required, return None to skip the rest of the output here
+        if not render_success:
+            return None
+        
         # Save HTML to output directory
         html_path = os.path.join(html_dir, f"{pdf_id}_page{page_num}.html")
         with open(html_path, "w") as f:
@@ -1911,35 +1943,6 @@ async def process_pdf(pdf_info, args, client, pdf_filter=None):
         original_pdf_path = os.path.join(pdfs_dir, f"{pdf_id}_page{page_num}_original.pdf")
         if not extract_page_from_pdf(local_pdf_path, original_pdf_path, page_num):
             print(f"Failed to extract page {page_num} from {local_pdf_path}")
-
-        # Render PDF using Playwright if not skipped
-        playwright_pdf_path = None
-        render_success = False
-        playwright_pdf_filename = f"{pdf_id}_page{page_num}.pdf"  # This will be used in the tests
-
-        if not args.skip_playwright:
-            playwright_pdf_path = os.path.join(pdfs_dir, playwright_pdf_filename)
-
-            try:
-                # Get PNG dimensions
-                png_width, png_height = get_png_dimensions_from_base64(image_base64)
-
-                # Run the async function directly since we're already in an async context
-                render_success = await render_pdf_with_playwright(html_content, playwright_pdf_path, png_width, png_height)
-
-                if render_success:
-                    print(f"Successfully rendered with Playwright: {playwright_pdf_path}")
-                else:
-                    print(f"Failed to render as a single page PDF: {playwright_pdf_path}")
-                    playwright_pdf_path = None
-            except Exception as e:
-                print(f"Failed to render with Playwright: {e}")
-                playwright_pdf_path = None
-                render_success = False
-
-        # If playwright rendering failed and was required, return None to skip this test
-        if not args.skip_playwright and not render_success:
-            return None
 
         # Create soft link in bench_data/synthetic/ directory
         if playwright_pdf_path:
@@ -1995,7 +1998,6 @@ async def main():
     parser.add_argument("--max_tests", type=int, default=100, help="Maximum number of tests to generate")
     parser.add_argument("--parallel", type=int, default=1, help="Number of parallel tasks to use")
     parser.add_argument("--api_key", help="Claude API key (or set ANTHROPIC_API_KEY environment variable)")
-    parser.add_argument("--skip_playwright", action="store_true", help="Skip Playwright PDF rendering")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose output including table test verification")
     parser.add_argument("--filter", action="store_true", help="Apply PDF filtering to remove forms, spam, and non-English content")
     parser.add_argument("--name", default="synthetic", help="Name for the output JSONL file and subfolder (default: synthetic)")
@@ -2157,8 +2159,7 @@ async def main():
 
     # Print summary of Playwright rendering results
     playwright_success = sum(1 for r in results if r and r.get("playwright_pdf_path"))
-    if not args.skip_playwright:
-        print(f"Playwright PDF rendering: {playwright_success}/{len(results)} successful")
+    print(f"Playwright PDF rendering: {playwright_success}/{len(results)} successful")
 
     print(f"Saved {test_counter} tests to {synthetic_json_path}")
 
