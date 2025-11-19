@@ -366,6 +366,12 @@ def html_to_markdown_with_frontmatter(html_content):
         img_tag = body_soup.new_tag("img", src="page.png", alt=alt_text)
         img_div.replace_with(img_tag)
 
+    # Handle SVG pictures in a similar way, just replace it as an image tag
+    for svg_tag in body_soup.find_all("svg"):
+        alt_text = "Graphic Placeholder"
+        img_tag = body_soup.new_tag("img", src="page.png", alt=alt_text)
+        svg_tag.replace_with(img_tag)
+
     # Get the modified HTML (only body content)
     modified_html = str(body_soup)
 

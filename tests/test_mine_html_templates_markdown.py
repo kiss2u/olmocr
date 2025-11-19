@@ -568,5 +568,102 @@ class TestSuperscriptSubscriptConversion(unittest.TestCase):
         self.assertNotIn("98", result)
         self.assertNotIn("82", result)
 
+    def test_svg_in_markdown(self):
+        html = """<!DOCTYPE html>
+
+<html lang="en">
+<head><meta content="d1fdb60869ea7e1e0c48228f80477b67661e7654" name="olmocr_git_commit"/>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Survey Results - Q6</title>
+</head>
+<body>
+<div class="question-header">
+        Q6. What, if anything, do you consider are the main barriers to the trading performance of your business?
+    </div>
+<div class="response-line total-row">
+<div class="response-text"></div>
+<div class="response-values">38   (100.00%)</div>
+</div>
+<div class="other-section">
+<div class="other-header">Other:</div>
+<div class="other-text">
+            Restrictions relating to listing of building and any alterations/modifications to make it more usable [1]; Lack of decent public transport - it is impossible for staff out of the area to reach Rothbury for 9am [1]
+        </div>
+</div>
+<div class="not-answered">
+        Not Answered:     3
+    </div>
+<div class="chart-container">
+<svg height="175" width="475" xmlns="http://www.w3.org/2000/svg">
+<!-- Y-axis labels -->
+<text font-family="Arial" font-size="8" x="10" y="15">35.0%</text>
+<text font-family="Arial" font-size="8" x="10" y="38">30.0%</text>
+<text font-family="Arial" font-size="8" x="10" y="62">25.0%</text>
+<text font-family="Arial" font-size="8" x="10" y="85">20.0%</text>
+<text font-family="Arial" font-size="8" x="10" y="108">15.0%</text>
+<text font-family="Arial" font-size="8" x="10" y="131">10.0%</text>
+<text font-family="Arial" font-size="8" x="15" y="154">5.0%</text>
+<text font-family="Arial" font-size="8" x="15" y="170">0.0%</text>
+<!-- Bars (heights scaled to fit - max 35% = ~155px height) -->
+<!-- a: 28.95% -->
+<rect fill="#6666ff" height="126" stroke="#000" stroke-width="0.5" width="20" x="55" y="42"></rect>
+<!-- b: 5.26% -->
+<rect fill="#6666ff" height="23" stroke="#000" stroke-width="0.5" width="20" x="80" y="145"></rect>
+<!-- c: 2.63% -->
+<rect fill="#6666ff" height="11" stroke="#000" stroke-width="0.5" width="20" x="105" y="157"></rect>
+<!-- d: 18.42% -->
+<rect fill="#6666ff" height="83" stroke="#000" stroke-width="0.5" width="20" x="130" y="85"></rect>
+<!-- e: 0% (tiny bar) -->
+<rect fill="#6666ff" height="2" stroke="#000" stroke-width="0.5" width="20" x="155" y="166"></rect>
+<!-- f: 2.63% -->
+<rect fill="#6666ff" height="11" stroke="#000" stroke-width="0.5" width="20" x="180" y="157"></rect>
+<!-- g: 7.89% -->
+<rect fill="#6666ff" height="36" stroke="#000" stroke-width="0.5" width="20" x="205" y="132"></rect>
+<!-- h: 5.26% -->
+<rect fill="#6666ff" height="23" stroke="#000" stroke-width="0.5" width="20" x="230" y="145"></rect>
+<!-- i: 0% -->
+<!-- j: 0% -->
+<!-- k: 7.89% -->
+<rect fill="#6666ff" height="36" stroke="#000" stroke-width="0.5" width="20" x="255" y="132"></rect>
+<!-- l: 5.26% -->
+<rect fill="#6666ff" height="23" stroke="#000" stroke-width="0.5" width="20" x="280" y="145"></rect>
+<!-- m: 7.89% -->
+<rect fill="#6666ff" height="36" stroke="#000" stroke-width="0.5" width="20" x="305" y="132"></rect>
+<!-- n: 5.26% -->
+<rect fill="#6666ff" height="23" stroke="#000" stroke-width="0.5" width="20" x="330" y="145"></rect>
+<!-- o: 2.63% -->
+<!-- p: 0% -->
+<!-- q: 2.63% -->
+<rect fill="#6666ff" height="11" stroke="#000" stroke-width="0.5" width="20" x="380" y="157"></rect>
+<!-- X-axis labels -->
+<text font-family="Arial" font-size="8" x="62" y="175">a</text>
+<text font-family="Arial" font-size="8" x="87" y="175">b</text>
+<text font-family="Arial" font-size="8" x="112" y="175">c</text>
+<text font-family="Arial" font-size="8" x="137" y="175">d</text>
+<text font-family="Arial" font-size="8" x="162" y="175">e</text>
+<text font-family="Arial" font-size="8" x="187" y="175">f</text>
+<text font-family="Arial" font-size="8" x="212" y="175">g</text>
+<text font-family="Arial" font-size="8" x="237" y="175">h</text>
+<text font-family="Arial" font-size="8" x="262" y="175">i</text>
+<text font-family="Arial" font-size="8" x="287" y="175">j</text>
+<text font-family="Arial" font-size="8" x="312" y="175">k</text>
+<text font-family="Arial" font-size="8" x="337" y="175">l</text>
+<text font-family="Arial" font-size="8" x="362" y="175">m</text>
+<text font-family="Arial" font-size="8" x="387" y="175">n</text>
+<!-- Axis lines -->
+<line stroke="#000" stroke-width="1" x1="50" x2="450" y1="168" y2="168"></line>
+<line stroke="#000" stroke-width="1" x1="50" x2="50" y1="10" y2="168"></line>
+</svg>
+</div>
+</body>
+</html>"""
+
+        result = html_to_markdown_with_frontmatter(html)
+        
+        self.assertNotIn("a\nb\nc", result)
+        self.assertIn("Graphic Placeholder", result)
+
+
 if __name__ == "__main__":
     unittest.main()
