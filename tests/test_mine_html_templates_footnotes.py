@@ -252,7 +252,7 @@ class TestFootnoteTestGeneration(unittest.TestCase):
             False,
         )
 
-        self.assertEqual(len([test for test in tests if test["type"] == "footnote"]), 3)        
+        self.assertEqual(len([test for test in tests if test["type"] == "footnote"]), 3)
 
         for test in [test for test in tests if test["type"] == "absent"]:
             self.assertNotEqual(test["text"], "Don't make an absense test")
@@ -294,12 +294,12 @@ class TestFootnoteTestGeneration(unittest.TestCase):
 </html>"""
 
         tests = generate_tests_from_html(
-                html,
-                self.pdf_id,
-                self.page_num,
-                self.random_gen,
-                False,
-         )
+            html,
+            self.pdf_id,
+            self.page_num,
+            self.random_gen,
+            False,
+        )
 
         # Check that tests containing sup/sub tags are filtered out
         # The test generation should filter these out already
@@ -489,13 +489,13 @@ class TestFootnoteTestGeneration(unittest.TestCase):
 </html>"""
 
         tests = generate_tests_from_html(
-                html,
-                self.pdf_id,
-                self.page_num,
-                self.random_gen,
-                False,
-         )
-        
+            html,
+            self.pdf_id,
+            self.page_num,
+            self.random_gen,
+            False,
+        )
+
         print(tests)
 
 

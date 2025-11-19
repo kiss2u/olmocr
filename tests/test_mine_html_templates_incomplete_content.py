@@ -1,15 +1,13 @@
 import asyncio
-import unittest
 import os
 import tempfile
+import unittest
 from unittest.mock import MagicMock, patch
 
 from bs4 import BeautifulSoup
 
 from olmocr.bench.tests import TestType
-from olmocr.synth.mine_html_templates import (
-    render_pdf_with_playwright
-)
+from olmocr.synth.mine_html_templates import render_pdf_with_playwright
 
 
 class TestIncompleteContent(unittest.TestCase):

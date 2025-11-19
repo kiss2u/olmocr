@@ -223,6 +223,5 @@ class TestMathExtraction(unittest.TestCase):
         self.assertTrue(len(present_tests) == 0)
 
 
-
 if __name__ == "__main__":
     unittest.main()

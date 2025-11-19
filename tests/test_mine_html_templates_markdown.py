@@ -660,7 +660,7 @@ class TestSuperscriptSubscriptConversion(unittest.TestCase):
 </html>"""
 
         result = html_to_markdown_with_frontmatter(html)
-        
+
         self.assertNotIn("a\nb\nc", result)
         self.assertIn("Graphic Placeholder", result)
 

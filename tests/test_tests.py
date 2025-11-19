@@ -326,9 +326,12 @@ means, provided that this copyright notice appears on all such copies.*
 
 * Julieta Frank (Julieta_Frank@umanitoba.ca) is an Assistant Professor, Derek Brewin is an Associate Professor, and Maria José Patiño is a graduate student in the Department of Agribusiness and Agricultural Economics at the University of Manitoba. The funding support of the Manitoba Rural Adaptation Council and the Solomon Sinclair Farm Management Institute are gratefully acknowledged."""
 
-        test = TextOrderTest(pdf="test.pdf", page=1, id="test_id", type=TestType.ORDER.value, before="Maria Jos\u00e9 Pati\u00f1o*", after="All rights reserved.", max_diffs=0)
+        test = TextOrderTest(
+            pdf="test.pdf", page=1, id="test_id", type=TestType.ORDER.value, before="Maria Jos\u00e9 Pati\u00f1o*", after="All rights reserved.", max_diffs=0
+        )
         result, _ = test.run(text)
         self.assertTrue(result)
+
 
 class TestTableTest(unittest.TestCase):
     """Test the TableTest class"""

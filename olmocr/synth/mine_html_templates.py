@@ -28,8 +28,8 @@ from olmocr.bench.tests import (
     FormatTest,
     TableTest,
     TestType,
-    TextPresenceTest,
     TextOrderTest,
+    TextPresenceTest,
     normalize_text,
     parse_html_tables,
 )
@@ -268,11 +268,11 @@ class PreserveTablesConverter(MarkdownConverter):
 
     def convert_sup(self, el, text, parent_tags):
         # Always preserve sup tags as HTML
-        return f'<sup>{el.get_text()}</sup>'
+        return f"<sup>{el.get_text()}</sup>"
 
     def convert_sub(self, el, text, parent_tags):
         # Always preserve sub tags as HTML
-        return f'<sub>{el.get_text()}</sub>'
+        return f"<sub>{el.get_text()}</sub>"
 
 
 def extract_html_metadata(html_content):
@@ -1198,14 +1198,14 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
             continue
 
         test_data = {
-                "pdf": pdf_filename,
-                "page": 1,
-                "id": f"{pdf_id}_order_{uuid.uuid4().hex[:8]}",
-                "type": TestType.ORDER.value,
-                "before": first_sentence,
-                "after": second_sentence,
-                "max_diffs": max_diffs,
-            }
+            "pdf": pdf_filename,
+            "page": 1,
+            "id": f"{pdf_id}_order_{uuid.uuid4().hex[:8]}",
+            "type": TestType.ORDER.value,
+            "before": first_sentence,
+            "after": second_sentence,
+            "max_diffs": max_diffs,
+        }
 
         # Create test object to validate
         try:
@@ -1220,7 +1220,7 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
         except Exception:
             # Skip if test creation or validation fails
             pass
-     
+
         if num_order_tests > 5:
             break
 
@@ -1881,7 +1881,7 @@ async def process_pdf(pdf_info, args, client, pdf_filter=None):
         os.makedirs(bench_synthetic_dir, exist_ok=True)
         os.makedirs(claude_original_dir, exist_ok=True)
 
-        # Render PDF using Playwright 
+        # Render PDF using Playwright
         playwright_pdf_path = None
         render_success = False
         playwright_pdf_filename = f"{pdf_id}_page{page_num}.pdf"  # This will be used in the tests
@@ -1908,7 +1908,7 @@ async def process_pdf(pdf_info, args, client, pdf_filter=None):
         # If playwright rendering failed and was required, return None to skip the rest of the output here
         if not render_success:
             return None
-        
+
         # Save HTML to output directory
         html_path = os.path.join(html_dir, f"{pdf_id}_page{page_num}.html")
         with open(html_path, "w") as f:

@@ -62,7 +62,7 @@ def normalize_text(md_content: str) -> str:
     # This automatically prevents matching **start \n\n end**.
     # We use group \1 to ensure we match matching pairs (**...** or __...__).
     md_content = re.sub(r"(\*\*|__)(.*?)\1", r"\2", md_content)  # Bold
-    md_content = re.sub(r"(\*|_)(.*?)\1", r"\2", md_content)     # Italics
+    md_content = re.sub(r"(\*|_)(.*?)\1", r"\2", md_content)  # Italics
 
     # Normalize whitespace in the md_content
     md_content = re.sub(r"\s+", " ", md_content)
