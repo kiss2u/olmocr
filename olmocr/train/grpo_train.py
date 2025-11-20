@@ -25,6 +25,7 @@ from transformers import (
     AutoProcessor,
     Qwen2_5_VLForConditionalGeneration,
     Qwen3VLForConditionalGeneration,
+    TrainerCallback,
 )
 from trl import GRPOConfig, GRPOTrainer
 
@@ -40,6 +41,150 @@ logging.basicConfig(
     level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
+
+
+class DetailedRewardLogger:
+    """Aggregates and logs detailed reward statistics by test type."""
+
+    def __init__(self):
+        self.batch_stats = []
+        self.accumulated_stats = {
+            "total_completions": 0,
+            "by_type": {},
+            "overall": {"passed": 0, "total": 0}
+        }
+
+    def add_batch_stats(self, batch_detailed_stats: List[Optional[Dict]]):
+        """Add statistics from a batch of completions."""
+        self.batch_stats.append(batch_detailed_stats)
+
+        for stats in batch_detailed_stats:
+            if stats is None:
+                continue
+
+            self.accumulated_stats["total_completions"] += 1
+
+            # Aggregate overall stats
+            if "overall" in stats:
+                self.accumulated_stats["overall"]["passed"] += stats["overall"]["passed"]
+                self.accumulated_stats["overall"]["total"] += stats["overall"]["total"]
+
+            # Aggregate by test type
+            for test_type, type_stats in stats.get("by_type", {}).items():
+                if test_type not in self.accumulated_stats["by_type"]:
+                    self.accumulated_stats["by_type"][test_type] = {
+                        "total_passed": 0,
+                        "total_tests": 0,
+                        "completion_count": 0
+                    }
+
+                self.accumulated_stats["by_type"][test_type]["total_passed"] += type_stats["passed"]
+                self.accumulated_stats["by_type"][test_type]["total_tests"] += type_stats["total"]
+                self.accumulated_stats["by_type"][test_type]["completion_count"] += 1
+
+    def get_summary_stats(self) -> Dict:
+        """Get summary statistics for logging."""
+        summary = {
+            "bench_reward/total_completions": self.accumulated_stats["total_completions"]
+        }
+
+        # Overall pass rate
+        if self.accumulated_stats["overall"]["total"] > 0:
+            summary["bench_reward/overall_pass_rate"] = (
+                self.accumulated_stats["overall"]["passed"] / self.accumulated_stats["overall"]["total"]
+            )
+
+        # Calculate average pass rates by type
+        for test_type, stats in self.accumulated_stats["by_type"].items():
+            if stats["total_tests"] > 0:
+                summary[f"bench_reward/{test_type}/pass_rate"] = (
+                    stats["total_passed"] / stats["total_tests"]
+                )
+                summary[f"bench_reward/{test_type}/total_tests"] = stats["total_tests"]
+                summary[f"bench_reward/{test_type}/avg_tests_per_completion"] = (
+                    stats["total_tests"] / max(stats["completion_count"], 1)
+                )
+
+        return summary
+
+    def get_batch_summary(self, batch_detailed_stats: List[Optional[Dict]]) -> Dict:
+        """Compute summary statistics for a single batch."""
+        summary = {"by_type": {}, "overall": {"passed": 0, "total": 0}}
+
+        for stats in batch_detailed_stats:
+            if stats is None:
+                continue
+
+            # Aggregate overall stats
+            if "overall" in stats:
+                summary["overall"]["passed"] += stats["overall"]["passed"]
+                summary["overall"]["total"] += stats["overall"]["total"]
+
+            # Aggregate by type
+            for test_type, type_stats in stats.get("by_type", {}).items():
+                if test_type not in summary["by_type"]:
+                    summary["by_type"][test_type] = {"passed": 0, "total": 0, "count": 0}
+
+                summary["by_type"][test_type]["passed"] += type_stats["passed"]
+                summary["by_type"][test_type]["total"] += type_stats["total"]
+                summary["by_type"][test_type]["count"] += 1
+
+        # Calculate pass rates
+        if summary["overall"]["total"] > 0:
+            summary["overall"]["pass_rate"] = summary["overall"]["passed"] / summary["overall"]["total"]
+
+        for test_type, stats in summary["by_type"].items():
+            if stats["total"] > 0:
+                stats["pass_rate"] = stats["passed"] / stats["total"]
+
+        return summary
+
+    def log_to_wandb(self, step: int):
+        """Log accumulated statistics to wandb."""
+        if is_main_process():
+            summary = self.get_summary_stats()
+            wandb.log(summary, step=step)
+            logger.info(f"Logged detailed reward stats at step {step}")
+
+            # Log a formatted summary to console
+            logger.info("=" * 60)
+            logger.info("Detailed Reward Statistics Summary:")
+            logger.info(f"Total completions evaluated: {self.accumulated_stats['total_completions']}")
+
+            if self.accumulated_stats["overall"]["total"] > 0:
+                overall_rate = self.accumulated_stats["overall"]["passed"] / self.accumulated_stats["overall"]["total"]
+                logger.info(f"Overall pass rate: {overall_rate:.3%} ({self.accumulated_stats['overall']['passed']}/{self.accumulated_stats['overall']['total']})")
+
+            logger.info("\nBreakdown by test type:")
+            for test_type in sorted(self.accumulated_stats["by_type"].keys()):
+                stats = self.accumulated_stats["by_type"][test_type]
+                if stats["total_tests"] > 0:
+                    pass_rate = stats["total_passed"] / stats["total_tests"]
+                    logger.info(f"  {test_type:12s}: {pass_rate:6.2%} ({stats['total_passed']:4d}/{stats['total_tests']:4d} tests)")
+            logger.info("=" * 60)
+
+
+# Global instance for tracking detailed reward statistics
+detailed_reward_logger = DetailedRewardLogger()
+
+
+class DetailedRewardLoggingCallback(TrainerCallback):
+    """Callback to log detailed reward statistics during training."""
+
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        """Called when trainer logs metrics."""
+        # Log detailed reward statistics periodically
+        if hasattr(detailed_reward_logger, 'accumulated_stats') and detailed_reward_logger.accumulated_stats["total_completions"] > 0:
+            detailed_reward_logger.log_to_wandb(state.global_step)
+
+    def on_evaluate(self, args, state, control, metrics=None, **kwargs):
+        """Called after evaluation."""
+        if metrics and is_main_process():
+            # Add detailed stats to evaluation metrics
+            summary = detailed_reward_logger.get_summary_stats()
+            for key, value in summary.items():
+                # Add eval prefix to distinguish from training metrics
+                metrics[f"eval/{key}"] = value
 
 
 def get_rank():
@@ -316,7 +461,7 @@ def load_specific_tests_cached(jsonl_file: str, test_ids_tuple: tuple):
     return relevant_tests
 
 
-def evaluate_single_completion(args: Tuple[int, Any, str, str, List[str]]) -> Tuple[int, Optional[float]]:
+def evaluate_single_completion(args: Tuple[int, Any, str, str, List[str]]) -> Tuple[int, Optional[float], Optional[Dict[str, Any]]]:
     """
     Helper function to evaluate a single completion against its tests.
 
@@ -324,7 +469,7 @@ def evaluate_single_completion(args: Tuple[int, Any, str, str, List[str]]) -> Tu
         args: Tuple of (index, completion, jsonl_file, pdf_path, test_ids)
 
     Returns:
-        Tuple of (index, reward) where reward is float or None for errors
+        Tuple of (index, reward, detailed_stats) where detailed_stats contains breakdown by test type
     """
     i, completion, comp_jsonl_file, comp_pdf_path, comp_test_ids = args
 
@@ -333,11 +478,11 @@ def evaluate_single_completion(args: Tuple[int, Any, str, str, List[str]]) -> Tu
     if completion is None or not (isinstance(completion, str) or isinstance(completion, list)):
         logger.warning(f"Invalid completion at index {i}: {type(completion)}")
         logger.warning(f"completion: {completion}")
-        return i, None
+        return i, None, None
 
     if comp_jsonl_file is None or comp_test_ids is None or len(comp_test_ids) == 0:
         logger.warning(f"Missing metadata for completion {i}")
-        return i, None
+        return i, None, None
 
     if isinstance(completion, list):
         completion = completion[0]["content"]
@@ -349,35 +494,59 @@ def evaluate_single_completion(args: Tuple[int, Any, str, str, List[str]]) -> Tu
 
         if not relevant_tests:
             logger.warning(f"No relevant tests found for test IDs: {comp_test_ids}")
-            return i, None
+            return i, None, None
 
         logger.info(f"Found {len(relevant_tests)} relevant tests for completion {i}")
 
-        # Run all relevant tests on this completion
-        passed = 0
-        total = len(relevant_tests)
+        # Track stats by test type
+        stats_by_type = {}
+        overall_stats = {"passed": 0, "total": len(relevant_tests)}
 
         for test in relevant_tests:
+            # Get test type from the test object
+            test_type = getattr(test, 'type', 'unknown')
+
+            if test_type not in stats_by_type:
+                stats_by_type[test_type] = {"passed": 0, "total": 0}
+
+            stats_by_type[test_type]["total"] += 1
+
             try:
                 test_passed, failure_reason = test.run(completion)
                 if test_passed:
-                    passed += 1
+                    stats_by_type[test_type]["passed"] += 1
+                    overall_stats["passed"] += 1
                 else:
-                    logger.debug(f"Test {test.id} failed: {failure_reason}")
+                    logger.debug(f"Test {test.id} ({test_type}) failed: {failure_reason}")
             except Exception as e:
-                logger.warning(f"Error running test {test.id}: {e}")
+                logger.warning(f"Error running test {test.id} ({test_type}): {e}")
                 # Count errored tests as failures
                 continue
 
-        # Calculate reward as proportion of tests passed
-        reward = passed / total if total > 0 else 0.0
+        # Calculate overall reward
+        overall_reward = overall_stats["passed"] / overall_stats["total"] if overall_stats["total"] > 0 else 0.0
 
-        logger.info(f"Completion {i}: {passed}/{total} tests passed, reward={reward:.3f}")
-        return i, reward
+        # Calculate per-type pass rates
+        for test_type, type_stats in stats_by_type.items():
+            type_stats["pass_rate"] = type_stats["passed"] / type_stats["total"] if type_stats["total"] > 0 else 0.0
+
+        detailed_stats = {
+            "overall": overall_stats,
+            "by_type": stats_by_type,
+            "reward": overall_reward,
+            "pdf_path": comp_pdf_path
+        }
+
+        logger.info(f"Completion {i}: {overall_stats['passed']}/{overall_stats['total']} tests passed, reward={overall_reward:.3f}")
+        # Log breakdown by type
+        for test_type, type_stats in stats_by_type.items():
+            logger.info(f"  {test_type}: {type_stats['passed']}/{type_stats['total']} passed (rate: {type_stats['pass_rate']:.3f})")
+
+        return i, overall_reward, detailed_stats
 
     except Exception as e:
         logger.error(f"Error processing completion {i}: {e}")
-        return i, None
+        return i, None, None
 
 
 def bench_edit_distance_reward(prompts, completions: list[str] | list[list[dict]], claude_original: list[Optional[str]], **kwargs):
@@ -740,11 +909,12 @@ def olmocr_bench_reward(
     **kwargs,
 ):
     """
-    Reward function that runs unit tests on completions and returns average pass rate.
+    Enhanced reward function that runs unit tests on completions and tracks detailed statistics.
     Uses ThreadPoolExecutor to evaluate completions in parallel.
 
     For each completion, loads the corresponding tests from the JSONL file and runs them.
     Returns the proportion of tests that pass as the reward score.
+    Also tracks and logs detailed statistics by test type.
 
     Args:
         prompts: List of prompts
@@ -770,6 +940,7 @@ def olmocr_bench_reward(
 
     # Process completions in parallel using ThreadPoolExecutor
     rewards = [None] * len(completions)  # Pre-allocate results list
+    detailed_stats = [None] * len(completions)  # Pre-allocate detailed stats list
 
     # Use number of CPUs for thread pool size, with a reasonable maximum
     max_workers = min(os.cpu_count() or 4, 16, len(completions))
@@ -780,8 +951,22 @@ def olmocr_bench_reward(
 
         # Collect results as they complete (but maintain order)
         for future in futures:
-            idx, reward = future.result()
+            idx, reward, stats = future.result()
             rewards[idx] = reward
+            detailed_stats[idx] = stats
+
+    # Log detailed statistics using the global logger
+    detailed_reward_logger.add_batch_stats(detailed_stats)
+
+    # Log batch summary for immediate feedback
+    if is_main_process():
+        batch_summary = detailed_reward_logger.get_batch_summary(detailed_stats)
+        logger.info("Batch summary:")
+        if batch_summary["overall"]["total"] > 0:
+            logger.info(f"  Overall: {batch_summary['overall']['pass_rate']:.3f} ({batch_summary['overall']['passed']}/{batch_summary['overall']['total']})")
+        for test_type, stats in batch_summary["by_type"].items():
+            if stats["total"] > 0:
+                logger.info(f"  {test_type}: {stats['pass_rate']:.3f} ({stats['passed']}/{stats['total']})")
 
     return rewards
 
@@ -824,7 +1009,7 @@ def main():
     parser.add_argument("--seed", type=int, default=42, help="Seed passed to TRL trainer to shuffle data, etc")
     parser.add_argument("--max_train_samples", type=int, default=None, help="Maximum number of training samples to use (default: use all)")
     parser.add_argument("--max_eval_samples", type=int, default=10, help="Maximum number of evaluation samples to use (default: 10)")
-    parser.add_argument("--wandb_project", type=str, default="olmocr-grpo", help="Weights & Biases project name")
+    parser.add_argument("--wandb_project", type=str, default="olmocr-grpo-v5", help="Weights & Biases project name")
     parser.add_argument("--wandb_run_name", type=str, default=None, help="Weights & Biases run name (default: auto-generated)")
     parser.add_argument("--loss_type", type=str, default="bnpo", choices=["bnpo", "grpo", "exo"], help="Loss formulation to use (default: bnpo)")
     parser.add_argument(
@@ -1075,6 +1260,11 @@ def main():
         eval_dataset=eval_dataset,
         reward_funcs=reward_funcs,
     )
+
+    # Add the callback for detailed reward logging
+    if args.reward_bench is not None:
+        logger.info("Adding DetailedRewardLoggingCallback for bench reward statistics")
+        trainer.add_callback(DetailedRewardLoggingCallback())
 
     # Start training
     logger.info("Starting GRPO training")
