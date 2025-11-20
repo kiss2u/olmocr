@@ -17,6 +17,7 @@ import pypdf
 from anthropic import AsyncAnthropic
 from bs4 import BeautifulSoup
 from markdownify import SPACES, MarkdownConverter
+from PIL import Image
 from playwright.async_api import async_playwright
 from syntok.segmenter import process
 from tqdm import tqdm
@@ -1851,6 +1852,69 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
     return unique_tests
 
 
+def apply_jpeg_compression(pdf_path, quality, temp_dir):
+    """
+    Apply JPEG compression to a PDF by converting to PNG, then to JPEG, then back to PDF.
+
+    Args:
+        pdf_path: Path to the input PDF file
+        quality: JPEG quality level (70-95)
+        temp_dir: Directory for temporary files
+
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        import base64
+        import io
+
+        # Create temp file paths
+        temp_jpeg_path = os.path.join(temp_dir, "temp_page.jpg")
+        temp_pdf_path = os.path.join(temp_dir, "temp_compressed.pdf")
+
+        # Convert PDF to PNG using existing render function (high resolution)
+        from olmocr.data.renderpdf import render_pdf_to_base64png
+
+        # Render at high resolution for better quality
+        png_base64 = render_pdf_to_base64png(pdf_path, 1, 1288)
+
+        # Decode base64 PNG data
+        png_data = base64.b64decode(png_base64)
+        png_buffer = io.BytesIO(png_data)
+
+        # Open the PNG and convert to JPEG with specified quality
+        with Image.open(png_buffer) as img:
+            # Convert RGBA to RGB if necessary
+            if img.mode in ('RGBA', 'LA', 'P'):
+                rgb_img = Image.new('RGB', img.size, (255, 255, 255))
+                # Paste using alpha channel as mask if available
+                if img.mode == 'RGBA' or img.mode == 'LA':
+                    rgb_img.paste(img, mask=img.split()[-1] if img.mode == 'RGBA' else img.split()[1])
+                else:
+                    rgb_img.paste(img)
+                img = rgb_img
+
+            # Save as JPEG with specified quality
+            img.save(temp_jpeg_path, 'JPEG', quality=quality, optimize=True)
+
+            # Convert JPEG back to PDF
+            img_for_pdf = Image.open(temp_jpeg_path)
+            img_for_pdf.save(temp_pdf_path, 'PDF', resolution=100.0)
+
+        # Replace original PDF with compressed version
+        os.replace(temp_pdf_path, pdf_path)
+
+        # Clean up temp files
+        if os.path.exists(temp_jpeg_path):
+            os.remove(temp_jpeg_path)
+
+        return True
+
+    except Exception as e:
+        print(f"Error applying JPEG compression: {e}")
+        return False
+
+
 async def process_pdf(pdf_info, args, client, pdf_filter=None):
     """Process a single PDF, render a random page, and create an HTML template."""
     pdf_path, index = pdf_info
@@ -1924,7 +1988,7 @@ async def process_pdf(pdf_info, args, client, pdf_filter=None):
             if head:
                 # Add meta tag with git commit
                 meta_tag = html_soup.new_tag("meta", attrs={"name": "olmocr_git_commit", "content": git_commit})
-                head.insert(0, meta_tag)
+                head.append(meta_tag)
 
                 # Update initial_html with the modified version
                 html_content = str(html_soup)
@@ -1959,6 +2023,24 @@ async def process_pdf(pdf_info, args, client, pdf_filter=None):
 
             if render_success:
                 print(f"Successfully rendered with Playwright: {playwright_pdf_path}")
+
+                # Apply JPEG compression if requested
+                if args.jpegify:
+                    # Select a random quality level between 70 and 95
+                    jpeg_quality = random_generator.randint(70, 95)
+                    print(f"Applying JPEG compression with quality {jpeg_quality} to {playwright_pdf_path}")
+
+                    compression_success = apply_jpeg_compression(
+                        playwright_pdf_path,
+                        jpeg_quality,
+                        temp_pdf_dir
+                    )
+
+                    if compression_success:
+                        print(f"Successfully applied JPEG compression with quality {jpeg_quality}")
+                    else:
+                        print(f"Warning: Failed to apply JPEG compression, keeping original PDF")
+
             else:
                 print(f"Failed to render as a single page PDF: {playwright_pdf_path}")
                 playwright_pdf_path = None
@@ -2063,6 +2145,7 @@ async def main():
     parser.add_argument("--verbose", action="store_true", help="Enable verbose output including table test verification")
     parser.add_argument("--densify", action="store_true", help="Set to ask claude to double the density of information on this page synthetically")
     parser.add_argument("--filter", action="store_true", help="Apply PDF filtering to remove forms, spam, and non-English content")
+    parser.add_argument("--jpegify", action="store_true", help="Apply JPEG compression to rendered PDFs with random quality (70-95)")
     parser.add_argument("--name", default="synthetic", help="Name for the output JSONL file and subfolder (default: synthetic)")
     args = parser.parse_args()
 
