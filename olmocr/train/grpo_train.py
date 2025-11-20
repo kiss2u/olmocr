@@ -8,6 +8,7 @@ import glob
 import json
 import logging
 import os
+import re
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
@@ -71,11 +72,13 @@ class OlmOCRBenchDataset(Dataset):
         processor,
         max_samples: Optional[int] = None,
         target_longest_image_dim: int = 1024,
+        jsonl_filter: Optional[str] = None,
     ):
         self.bench_data_folder = bench_data_folder
         self.processor = processor
         self.target_longest_image_dim = target_longest_image_dim
         self.max_samples = max_samples
+        self.jsonl_filter = jsonl_filter
 
         # Find PDF folder
         self.pdf_folder = os.path.join(bench_data_folder, "pdfs")
@@ -155,7 +158,27 @@ class OlmOCRBenchDataset(Dataset):
         if not jsonl_files:
             raise ValueError(f"No JSONL files found in {self.bench_data_folder}")
 
-        logger.info(f"Found {len(jsonl_files)} JSONL files")
+        # Apply jsonl_filter if provided
+        if self.jsonl_filter:
+            try:
+                filter_pattern = re.compile(self.jsonl_filter, re.IGNORECASE)
+                filtered_files = []
+                for jsonl_file in jsonl_files:
+                    basename = os.path.basename(jsonl_file)
+                    if filter_pattern.search(basename):
+                        filtered_files.append(jsonl_file)
+                        logger.info(f"Including JSONL file: {basename} (matched filter '{self.jsonl_filter}')")
+                    else:
+                        logger.debug(f"Excluding JSONL file: {basename} (did not match filter '{self.jsonl_filter}')")
+
+                jsonl_files = filtered_files
+
+                if not jsonl_files:
+                    raise ValueError(f"No JSONL files matched filter '{self.jsonl_filter}' in {self.bench_data_folder}")
+            except re.error as e:
+                raise ValueError(f"Invalid regex pattern '{self.jsonl_filter}': {e}")
+
+        logger.info(f"Found {len(jsonl_files)} JSONL files" + (f" after filtering with '{self.jsonl_filter}'" if self.jsonl_filter else ""))
 
         # Track unique PDFs and their test cases
         pdf_data: Dict[str, Dict[str, Any]] = {}
@@ -777,6 +800,13 @@ def main():
         "--train_bench_data_folder", type=str, required=True, help="Path to training bench data folder containing JSONL files and pdfs subfolder"
     )
     parser.add_argument(
+        "--jsonl_filter",
+        type=str,
+        required=False,
+        default=None,
+        help="Regex pattern to filter JSONL files by basename (e.g., 'arxiv|physics' matches arxiv.jsonl, physics.jsonl, arxiv_math.jsonl, etc.)",
+    )
+    parser.add_argument(
         "--eval_bench_data_folder",
         type=str,
         required=False,
@@ -905,11 +935,14 @@ def main():
 
     # Create training dataset
     logger.info(f"Creating training dataset from: {args.train_bench_data_folder}")
+    if args.jsonl_filter:
+        logger.info(f"Applying JSONL filter pattern: '{args.jsonl_filter}'")
     train_dataset = OlmOCRBenchDataset(
         bench_data_folder=args.train_bench_data_folder,
         processor=processor,
         max_samples=args.max_train_samples,
         target_longest_image_dim=1288,
+        jsonl_filter=args.jsonl_filter,
     )
 
     if len(train_dataset) == 0:
@@ -923,6 +956,7 @@ def main():
         processor=processor,
         max_samples=args.max_eval_samples,
         target_longest_image_dim=1288,
+        jsonl_filter=args.jsonl_filter,  # Apply same filter to evaluation dataset
     )
 
     if len(eval_dataset) == 0:
