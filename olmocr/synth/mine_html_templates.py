@@ -2140,6 +2140,7 @@ async def main():
     parser.add_argument("--output_dir", required=True, help="Directory to store extracted pages and tests")
     parser.add_argument("--temp_dir", default="/tmp/mine_tables", help="Directory for temporary files")
     parser.add_argument("--max_tests", type=int, default=100, help="Maximum number of tests to generate")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed for sampling selection of PDFs")
     parser.add_argument("--parallel", type=int, default=1, help="Number of parallel tasks to use")
     parser.add_argument("--api_key", help="Claude API key (or set ANTHROPIC_API_KEY environment variable)")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose output including table test verification")
@@ -2173,7 +2174,7 @@ async def main():
         print("PDF filtering enabled")
 
     # Reservoir sampling implementation
-    random_gen = random.Random(42)
+    random_gen = random.Random(args.seed)
     pdf_paths = []
 
     if os.path.isdir(args.input_list):
