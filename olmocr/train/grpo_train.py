@@ -1002,7 +1002,7 @@ def main():
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         learning_rate=args.learning_rate,
         logging_steps=10,
-        save_steps=100,
+        save_steps=50,
         save_total_limit=3,
         eval_steps=50,
         warmup_steps=args.warmup_steps,
