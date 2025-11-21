@@ -10,6 +10,7 @@ import logging
 import os
 import re
 import sys
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 from io import BytesIO
@@ -44,7 +45,7 @@ logger = logging.getLogger(__name__)
 
 
 class DetailedRewardLogger:
-    """Aggregates and logs detailed reward statistics by test type."""
+    """Aggregates and logs detailed reward statistics by test type and JSONL file."""
 
     def __init__(self):
         self.clear()
@@ -53,7 +54,8 @@ class DetailedRewardLogger:
         self.batch_stats = []
         self.accumulated_stats = {
             "total_completions": 0,
-            "by_type": {},
+            "by_type": defaultdict(lambda: {"total_passed": 0, "total_tests": 0, "completion_count": 0}),
+            "by_jsonl": defaultdict(lambda: {"total_passed": 0, "total_tests": 0, "completion_count": 0}),
             "overall": {"passed": 0, "total": 0}
         }
 
@@ -74,16 +76,18 @@ class DetailedRewardLogger:
 
             # Aggregate by test type
             for test_type, type_stats in stats.get("by_type", {}).items():
-                if test_type not in self.accumulated_stats["by_type"]:
-                    self.accumulated_stats["by_type"][test_type] = {
-                        "total_passed": 0,
-                        "total_tests": 0,
-                        "completion_count": 0
-                    }
-
                 self.accumulated_stats["by_type"][test_type]["total_passed"] += type_stats["passed"]
                 self.accumulated_stats["by_type"][test_type]["total_tests"] += type_stats["total"]
                 self.accumulated_stats["by_type"][test_type]["completion_count"] += 1
+
+            # Aggregate by JSONL file
+            if "jsonl_file" in stats:
+                # Extract just the filename from the full path
+                jsonl_name = os.path.basename(stats["jsonl_file"])
+                if "overall" in stats:
+                    self.accumulated_stats["by_jsonl"][jsonl_name]["total_passed"] += stats["overall"]["passed"]
+                    self.accumulated_stats["by_jsonl"][jsonl_name]["total_tests"] += stats["overall"]["total"]
+                    self.accumulated_stats["by_jsonl"][jsonl_name]["completion_count"] += 1
 
     def get_summary_stats(self) -> Dict:
         """Get summary statistics for logging."""
@@ -108,11 +112,23 @@ class DetailedRewardLogger:
                     stats["total_tests"] / max(stats["completion_count"], 1)
                 )
 
+        # Calculate average pass rates by JSONL file
+        for jsonl_name, stats in self.accumulated_stats["by_jsonl"].items():
+            if stats["total_tests"] > 0:
+                summary[f"bench_reward/jsonl_{jsonl_name}/pass_rate"] = (
+                    stats["total_passed"] / stats["total_tests"]
+                )
+                summary[f"bench_reward/jsonl_{jsonl_name}/total_tests"] = stats["total_tests"]
+
         return summary
 
     def get_batch_summary(self, batch_detailed_stats: List[Optional[Dict]]) -> Dict:
         """Compute summary statistics for a single batch."""
-        summary = {"by_type": {}, "overall": {"passed": 0, "total": 0}}
+        summary = {
+            "by_type": defaultdict(lambda: {"passed": 0, "total": 0, "count": 0}),
+            "by_jsonl": defaultdict(lambda: {"passed": 0, "total": 0, "count": 0}),
+            "overall": {"passed": 0, "total": 0}
+        }
 
         for stats in batch_detailed_stats:
             if stats is None:
@@ -125,18 +141,27 @@ class DetailedRewardLogger:
 
             # Aggregate by type
             for test_type, type_stats in stats.get("by_type", {}).items():
-                if test_type not in summary["by_type"]:
-                    summary["by_type"][test_type] = {"passed": 0, "total": 0, "count": 0}
-
                 summary["by_type"][test_type]["passed"] += type_stats["passed"]
                 summary["by_type"][test_type]["total"] += type_stats["total"]
                 summary["by_type"][test_type]["count"] += 1
+
+            # Aggregate by JSONL file
+            if "jsonl_file" in stats:
+                jsonl_name = os.path.basename(stats["jsonl_file"])
+                if "overall" in stats:
+                    summary["by_jsonl"][jsonl_name]["passed"] += stats["overall"]["passed"]
+                    summary["by_jsonl"][jsonl_name]["total"] += stats["overall"]["total"]
+                    summary["by_jsonl"][jsonl_name]["count"] += 1
 
         # Calculate pass rates
         if summary["overall"]["total"] > 0:
             summary["overall"]["pass_rate"] = summary["overall"]["passed"] / summary["overall"]["total"]
 
         for test_type, stats in summary["by_type"].items():
+            if stats["total"] > 0:
+                stats["pass_rate"] = stats["passed"] / stats["total"]
+
+        for jsonl_name, stats in summary["by_jsonl"].items():
             if stats["total"] > 0:
                 stats["pass_rate"] = stats["passed"] / stats["total"]
 
@@ -164,6 +189,13 @@ class DetailedRewardLogger:
                 if stats["total_tests"] > 0:
                     pass_rate = stats["total_passed"] / stats["total_tests"]
                     logger.info(f"  {test_type:12s}: {pass_rate:6.2%} ({stats['total_passed']:4d}/{stats['total_tests']:4d} tests)")
+
+            logger.info("\nBreakdown by JSONL file:")
+            for jsonl_name in sorted(self.accumulated_stats["by_jsonl"].keys()):
+                stats = self.accumulated_stats["by_jsonl"][jsonl_name]
+                if stats["total_tests"] > 0:
+                    pass_rate = stats["total_passed"] / stats["total_tests"]
+                    logger.info(f"  {jsonl_name:20s}: {pass_rate:6.2%} ({stats['total_passed']:4d}/{stats['total_tests']:4d} tests)")
             logger.info("=" * 60)
 
 
@@ -493,17 +525,13 @@ def evaluate_single_completion(args: Tuple[int, Any, str, str, List[str]]) -> Tu
 
         logger.info(f"Found {len(relevant_tests)} relevant tests for completion {i}")
 
-        # Track stats by test type
-        stats_by_type = {}
+        # Track stats by test type using defaultdict
+        stats_by_type = defaultdict(lambda: {"passed": 0, "total": 0})
         overall_stats = {"passed": 0, "total": len(relevant_tests)}
 
         for test in relevant_tests:
             # Get test type from the test object
             test_type = getattr(test, 'type', 'unknown')
-
-            if test_type not in stats_by_type:
-                stats_by_type[test_type] = {"passed": 0, "total": 0}
-
             stats_by_type[test_type]["total"] += 1
 
             try:
@@ -527,9 +555,10 @@ def evaluate_single_completion(args: Tuple[int, Any, str, str, List[str]]) -> Tu
 
         detailed_stats = {
             "overall": overall_stats,
-            "by_type": stats_by_type,
+            "by_type": dict(stats_by_type),  # Convert defaultdict to regular dict for serialization
             "reward": overall_reward,
-            "pdf_path": comp_pdf_path
+            "pdf_path": comp_pdf_path,
+            "jsonl_file": comp_jsonl_file
         }
 
         logger.info(f"Completion {i}: {overall_stats['passed']}/{overall_stats['total']} tests passed, reward={overall_reward:.3f}")
@@ -959,9 +988,13 @@ def olmocr_bench_reward(
         logger.info("Batch summary:")
         if batch_summary["overall"]["total"] > 0:
             logger.info(f"  Overall: {batch_summary['overall']['pass_rate']:.3f} ({batch_summary['overall']['passed']}/{batch_summary['overall']['total']})")
-        for test_type, stats in batch_summary["by_type"].items():
-            if stats["total"] > 0:
-                logger.info(f"  {test_type}: {stats['pass_rate']:.3f} ({stats['passed']}/{stats['total']})")
+
+        # Log by JSONL file
+        if batch_summary["by_jsonl"]:
+            logger.info("  By JSONL file:")
+            for jsonl_name, stats in batch_summary["by_jsonl"].items():
+                if stats["total"] > 0:
+                    logger.info(f"    {jsonl_name}: {stats['pass_rate']:.3f} ({stats['passed']}/{stats['total']})")
 
     return rewards
 
