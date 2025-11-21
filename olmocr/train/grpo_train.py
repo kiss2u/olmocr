@@ -47,6 +47,9 @@ class DetailedRewardLogger:
     """Aggregates and logs detailed reward statistics by test type."""
 
     def __init__(self):
+        self.clear()
+
+    def clear(self):
         self.batch_stats = []
         self.accumulated_stats = {
             "total_completions": 0,
@@ -143,7 +146,7 @@ class DetailedRewardLogger:
         """Log accumulated statistics to wandb."""
         if is_main_process():
             summary = self.get_summary_stats()
-            wandb.log(summary, step=step)
+            wandb.log(summary) # Don't pass in step to wandb, or else it can get confused
             logger.info(f"Logged detailed reward stats at step {step}")
 
             # Log a formatted summary to console
@@ -176,15 +179,7 @@ class DetailedRewardLoggingCallback(TrainerCallback):
         # Log detailed reward statistics periodically
         if hasattr(detailed_reward_logger, 'accumulated_stats') and detailed_reward_logger.accumulated_stats["total_completions"] > 0:
             detailed_reward_logger.log_to_wandb(state.global_step)
-
-    def on_evaluate(self, args, state, control, metrics=None, **kwargs):
-        """Called after evaluation."""
-        if metrics and is_main_process():
-            # Add detailed stats to evaluation metrics
-            summary = detailed_reward_logger.get_summary_stats()
-            for key, value in summary.items():
-                # Add eval prefix to distinguish from training metrics
-                metrics[f"eval/{key}"] = value
+            detailed_reward_logger.clear()
 
 
 def get_rank():
@@ -216,7 +211,7 @@ class OlmOCRBenchDataset(Dataset):
         bench_data_folder: str,
         processor,
         max_samples: Optional[int] = None,
-        target_longest_image_dim: int = 1024,
+        target_longest_image_dim: int = 1288,
         jsonl_filter: Optional[str] = None,
     ):
         self.bench_data_folder = bench_data_folder
@@ -1222,12 +1217,12 @@ def main():
         learning_rate=args.learning_rate,
         logging_steps=10,
         save_steps=50,
-        save_total_limit=3,
+        save_total_limit=30,
         eval_steps=50,
         warmup_steps=args.warmup_steps,
         max_prompt_length=3000,
         max_completion_length=8000,
-        temperature=0.7,
+        temperature=0.8,
         report_to=report_to,
         remove_unused_columns=False,
         bf16=True,
@@ -1248,6 +1243,7 @@ def main():
         vllm_mode=args.vllm_mode if args.vllm_mode != "none" else "colocate",
         vllm_gpu_memory_utilization=0.15,
         log_completions=True,
+        num_completions_to_print=2,
     )
 
     # Initialize GRPO trainer
