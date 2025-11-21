@@ -1007,6 +1007,7 @@ def main():
     parser.add_argument("--wandb_project", type=str, default="olmocr-grpo-v5", help="Weights & Biases project name")
     parser.add_argument("--wandb_run_name", type=str, default=None, help="Weights & Biases run name (default: auto-generated)")
     parser.add_argument("--loss_type", type=str, default="bnpo", choices=["bnpo", "grpo", "exo"], help="Loss formulation to use (default: bnpo)")
+    parser.add_argument("--cast_lm_head_to_fp32", action="store_true", help="Forwards to HF TRL to cast lm head to fp32 full precision")
     parser.add_argument(
         "--scale_rewards",
         type=str,
@@ -1238,6 +1239,7 @@ def main():
         reward_weights=reward_weights,
         num_iterations=args.num_iterations,
         num_generations=args.num_generations,
+        cast_lm_head_to_fp32=args.cast_lm_head_to_fp32,
         # Vllm setup to speed up generation
         use_vllm=(args.vllm_mode != "none"),
         vllm_mode=args.vllm_mode if args.vllm_mode != "none" else "colocate",
