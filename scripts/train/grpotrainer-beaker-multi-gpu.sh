@@ -6,7 +6,8 @@ set -e
 SKIP_DOCKER_BUILD=false
 PREEMPTIBLE=false
 EXP_NAME=""
-NUM_GPUS=4
+NUM_TRAIN_GPUS=3
+NUM_GENERATE_GPUS=1
 
 # Store all arguments to pass to python command
 PYTHON_ARGS=()
@@ -25,10 +26,18 @@ while [[ $# -gt 0 ]]; do
             EXP_NAME="$2"
             shift 2
             ;;
-        --num-gpus)
-            NUM_GPUS="$2"
-            if [ "$NUM_GPUS" -lt 2 ] || [ "$NUM_GPUS" -gt 8 ]; then
-                echo "Error: --num-gpus must be between 2 and 8 (got: $NUM_GPUS)"
+        --num-train-gpus)
+            NUM_TRAIN_GPUS="$2"
+            if [ "$NUM_TRAIN_GPUS" -lt 1 ] || [ "$NUM_TRAIN_GPUS" -gt 7 ]; then
+                echo "Error: --num-train-gpus must be between 1 and 7 (got: $NUM_TRAIN_GPUS)"
+                exit 1
+            fi
+            shift 2
+            ;;
+        --num-generate-gpus)
+            NUM_GENERATE_GPUS="$2"
+            if [ "$NUM_GENERATE_GPUS" -lt 1 ] || [ "$NUM_GENERATE_GPUS" -gt 4 ]; then
+                echo "Error: --num-generate-gpus must be between 1 and 4 (got: $NUM_GENERATE_GPUS)"
                 exit 1
             fi
             shift 2
@@ -40,14 +49,16 @@ while [[ $# -gt 0 ]]; do
             echo "  --skip-docker-build            Skip Docker build"
             echo "  --preemptible                  Use preemptible instances"
             echo "  --name NAME                    Experiment name (used in output directory)"
-            echo "  --num-gpus N                   Number of GPUs to use (2-8, default: 4)"
+            echo "  --num-train-gpus N             Number of GPUs for training (1-7, default: 3)"
+            echo "  --num-generate-gpus N          Number of GPUs for VLLM generation (1-4, default: 1)"
             echo ""
             echo "All other arguments are forwarded to python -m olmocr.train.grpo_train"
             echo "Run 'python -m olmocr.train.grpo_train --help' to see available training options"
             echo ""
             echo "This Augusta multi-GPU version runs:"
-            echo "  - VLLM server on the last GPU"
-            echo "  - Training on all other GPUs with DeepSpeed"
+            echo "  - VLLM server with data parallel on N generation GPUs"
+            echo "  - Training on M training GPUs with DeepSpeed"
+            echo "  - Total GPUs used: M + N"
             echo "  - Outputs saved locally then synced to S3"
             echo ""
             echo "Note: This version is configured for ai2/augusta cluster (no Weka)"
@@ -61,9 +72,20 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# Validate total GPU count
+TOTAL_GPUS=$((NUM_TRAIN_GPUS + NUM_GENERATE_GPUS))
+if [ "$TOTAL_GPUS" -gt 8 ]; then
+    echo "Error: Total GPUs (training + generation) cannot exceed 8 (got: $TOTAL_GPUS)"
+    echo "  Training GPUs: $NUM_TRAIN_GPUS"
+    echo "  Generation GPUs: $NUM_GENERATE_GPUS"
+    exit 1
+fi
+
 echo "Preemptible: $PREEMPTIBLE"
 echo "Skip Docker Build: $SKIP_DOCKER_BUILD"
-echo "Number of GPUs: $NUM_GPUS"
+echo "Number of Training GPUs: $NUM_TRAIN_GPUS"
+echo "Number of Generation GPUs: $NUM_GENERATE_GPUS"
+echo "Total GPUs: $TOTAL_GPUS"
 echo "Arguments to forward: ${PYTHON_ARGS[@]}"
 
 # Use conda environment Python if available, otherwise use system Python
@@ -123,15 +145,23 @@ git_branch = sys.argv[3]
 git_hash = sys.argv[4]
 preemptible = sys.argv[5] == "true"
 exp_name = sys.argv[6]  # Empty string if not provided
-num_gpus = int(sys.argv[7])
+num_train_gpus = int(sys.argv[7])
+num_generate_gpus = int(sys.argv[8])
 # All remaining arguments are the python command arguments
-python_args = sys.argv[8:]
+python_args = sys.argv[9:]
 
 # Calculate GPU assignments
-vllm_gpu = num_gpus - 1  # Last GPU for VLLM
-training_gpus = list(range(num_gpus - 1))  # All other GPUs for training
+# Total GPUs needed
+num_gpus = num_train_gpus + num_generate_gpus
+
+# Assign first num_train_gpus for training
+training_gpus = list(range(num_train_gpus))
 training_gpu_str = ",".join(str(g) for g in training_gpus)
 num_training_processes = len(training_gpus)
+
+# Assign next num_generate_gpus for VLLM generation
+vllm_gpus = list(range(num_train_gpus, num_train_gpus + num_generate_gpus))
+vllm_gpu_str = ",".join(str(g) for g in vllm_gpus)
 
 # Initialize Beaker client
 b = Beaker.from_env(default_workspace="ai2/olmocr")
@@ -331,8 +361,8 @@ echo "Creating output directory: $ACTUAL_OUTPUT_DIR"
 mkdir -p "$ACTUAL_OUTPUT_DIR"
 
 # Start VLLM server in background (output goes to console)
-echo 'Starting VLLM server on GPU {vllm_gpu} as background process...'
-CUDA_VISIBLE_DEVICES={vllm_gpu} trl vllm-serve --model {vllm_model_arg} --port 8000 --gpu-memory-utilization 0.5 --max-model-len 16384 &
+echo 'Starting VLLM server on GPUs {vllm_gpu_str} with data parallel...'
+CUDA_VISIBLE_DEVICES={vllm_gpu_str} trl vllm-serve --model {vllm_model_arg} --port 8000 --gpu-memory-utilization 0.5 --max-model-len 16384 -dp {num_generate_gpus} &
 VLLM_PID=$!
 echo "VLLM server started with PID: $VLLM_PID"
 
@@ -350,7 +380,7 @@ for i in {{1..60}}; do
 done
 
 # Run training (expand BEAKER_WORKLOAD_ID in the command)
-echo 'Starting GRPO training on GPUs {training_gpu_str}...'
+echo 'Starting GRPO training on GPUs {training_gpu_str} ({num_training_processes} processes)...'
 echo 'BEAKER_WORKLOAD_ID: '$BEAKER_WORKLOAD_ID
 # Replace placeholder with actual workload ID in the command
 GRPO_CMD="{grpo_cmd}"
@@ -399,7 +429,7 @@ for i, arg in enumerate(modified_args):
 
 # Create experiment spec with single task
 experiment_spec = ExperimentSpec(
-    description=f"OlmOCR GRPO Multi-GPU Training ({num_training_processes} GPUs + VLLM Server) - Model: {model_name}, Branch: {git_branch}, Commit: {git_hash}",
+    description=f"OlmOCR GRPO Multi-GPU Training ({num_train_gpus} train GPUs + {num_generate_gpus} VLLM GPUs) - Model: {model_name}, Branch: {git_branch}, Commit: {git_hash}",
     budget="ai2/oe-base",
     tasks=[task_spec],  # Single task that manages both VLLM and training
 )
@@ -419,7 +449,8 @@ $PYTHON /tmp/run_grpo_experiment_multi_gpu.py \
     "$GIT_HASH" \
     "$PREEMPTIBLE" \
     "$EXP_NAME" \
-    "$NUM_GPUS" \
+    "$NUM_TRAIN_GPUS" \
+    "$NUM_GENERATE_GPUS" \
     "${PYTHON_ARGS[@]}"
 
 # Clean up temporary file
