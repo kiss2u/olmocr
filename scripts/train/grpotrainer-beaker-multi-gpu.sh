@@ -199,7 +199,7 @@ setup_commands = [
     "pip install trl wandb",
     "pip install transformers==4.57.1",  # Updated for GRPO compatibility
     "pip install flash-attn --no-build-isolation",
-    "pip install vllm==0.11.0",
+    "pip install vllm==0.10.2",
     "pip install s5cmd",
     "pip install accelerate deepspeed",
     
@@ -352,7 +352,7 @@ mkdir -p "$ACTUAL_OUTPUT_DIR"
 
 # Start VLLM server in background (output goes to console)
 echo 'Starting VLLM server on GPUs {vllm_gpu_str} with data parallel...'
-CUDA_VISIBLE_DEVICES={vllm_gpu_str} trl vllm-serve --model {vllm_model_arg} --port 8000 --gpu-memory-utilization 0.5 --max-model-len 16384 -dp {num_generate_gpus} &
+CUDA_VISIBLE_DEVICES={vllm_gpu_str} trl vllm-serve --model {vllm_model_arg} --port 8000 --gpu-memory-utilization 0.5 --max-model-len 16384 --data-parallel-size {num_generate_gpus} &
 VLLM_PID=$!
 echo "VLLM server started with PID: $VLLM_PID"
 
@@ -397,7 +397,7 @@ task_spec = TaskSpec(
         gpu_count=num_gpus,  # Request the specified number of GPUs
         shared_memory="10GiB"
     ),
-    constraints=Constraints(cluster=["ai2/jupiter"]),
+    constraints=Constraints(cluster=["ai2/jupiter", "ai2/augusta"]),
     result=ResultSpec(path="/noop-results"),
     env_vars=[
         EnvVar(name="LOG_FILTER_TYPE", value="local_rank0_only"),
