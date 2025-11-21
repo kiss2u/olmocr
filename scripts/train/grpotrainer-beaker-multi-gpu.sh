@@ -59,7 +59,7 @@ while [[ $# -gt 0 ]]; do
             echo "  - VLLM server with data parallel on N generation GPUs"
             echo "  - Training on M training GPUs with DeepSpeed"
             echo "  - Total GPUs used: M + N"
-            echo "  - Outputs saved locally then synced to S3"
+            echo "  - Outputs saved locally then synced to S3 automatically via --s3_save_path"
             echo ""
             echo "Note: This version is configured for ai2/augusta cluster (no Weka)"
             exit 0
@@ -263,11 +263,11 @@ if "--output_dir" not in arg_str:
         output_folder_name = f"{exp_name}-multigpu-$BEAKER_WORKLOAD_ID"
     else:
         output_folder_name = f"multigpu-$BEAKER_WORKLOAD_ID"
-    
+
     # Local output directory (with placeholder for runtime expansion)
     local_output_dir = f"/tmp/checkpoints/{output_folder_name}"
     grpo_cmd += f" --output_dir {local_output_dir}"
-    
+
     # S3 destination (with placeholder for runtime expansion)
     s3_output_path = f"s3://ai2-oe-data/jakep/olmocr-grpo-checkpoints/{output_folder_name}"
 else:
@@ -280,6 +280,11 @@ else:
             output_folder_name = os.path.basename(local_output_dir)
             s3_output_path = f"s3://ai2-oe-data/jakep/olmocr-grpo-checkpoints/{output_folder_name}"
             break
+
+# Add --s3_save_path parameter if we have an S3 output path
+# Check if --s3_save_path is not already in the arguments
+if s3_output_path and "--s3_save_path" not in arg_str:
+    grpo_cmd += f" --s3_save_path {s3_output_path}"
 
 # Add all the (possibly modified) arguments, filtering out --vllm_mode if it exists to avoid duplicates
 # Note: We keep --gradient_accumulation_steps in the args even though we use it for accelerate,
@@ -314,38 +319,23 @@ echo "BEAKER_WORKLOAD_ID: $BEAKER_WORKLOAD_ID"
 cleanup() {{
     EXIT_CODE=$?
     echo "Running cleanup (exit code: $EXIT_CODE)..."
-    
+
     # Kill VLLM server if it's still running
     if [ ! -z "$VLLM_PID" ]; then
         echo "Killing VLLM server (PID: $VLLM_PID)..."
         kill $VLLM_PID || true
         echo "VLLM server stopped."
     fi
-    
-    # Always sync to S3 if output directory exists
-    echo "Checking for outputs to sync to S3..."
-    # Expand BEAKER_WORKLOAD_ID at runtime
-    ACTUAL_OUTPUT_DIR="{local_output_dir.replace('$BEAKER_WORKLOAD_ID', '${BEAKER_WORKLOAD_ID}') if local_output_dir else '/tmp/checkpoints'}"
-    if [ -d "$ACTUAL_OUTPUT_DIR" ]; then
-        echo "Output directory exists at $ACTUAL_OUTPUT_DIR"
-        # List contents for verification
-        echo "Directory contents:"
-        ls -la "$ACTUAL_OUTPUT_DIR" | head -20
-        
-        {f'ACTUAL_S3_PATH="{s3_output_path.replace("$BEAKER_WORKLOAD_ID", "${BEAKER_WORKLOAD_ID}")}"' if s3_output_path else ''}
-        {f'echo "Syncing from $ACTUAL_OUTPUT_DIR to $ACTUAL_S3_PATH"' if s3_output_path else ''}
-        {f's5cmd sync "$ACTUAL_OUTPUT_DIR/" "$ACTUAL_S3_PATH/"' if s3_output_path else 'echo "No S3 sync configured"'}
-        {f'echo "S3 sync completed"' if s3_output_path else ''}
-    else
-        echo "No output directory found at $ACTUAL_OUTPUT_DIR, skipping S3 sync"
-    fi
-    
+
+    # S3 sync is now handled by the training script via --s3_save_path
+    echo "Note: S3 sync is handled by the training script's S3SyncCallback"
+
     if [ $EXIT_CODE -eq 0 ]; then
         echo "Script completed successfully"
     else
         echo "Script failed with exit code: $EXIT_CODE"
     fi
-    
+
     exit $EXIT_CODE
 }}
 

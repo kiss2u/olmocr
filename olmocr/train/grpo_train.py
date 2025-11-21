@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import re
+import subprocess
 import sys
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
@@ -212,6 +213,74 @@ class DetailedRewardLoggingCallback(TrainerCallback):
         if hasattr(detailed_reward_logger, 'accumulated_stats') and detailed_reward_logger.accumulated_stats["total_completions"] > 0:
             detailed_reward_logger.log_to_wandb(state.global_step)
             detailed_reward_logger.clear()
+
+
+class S3SyncCallback(TrainerCallback):
+    """Callback to sync entire output directory to S3 after saving."""
+
+    def __init__(self, s3_save_path: str, output_dir: str):
+        """
+        Initialize the S3 sync callback.
+
+        Args:
+            s3_save_path: S3 path to sync checkpoints to (e.g., s3://bucket/path/)
+            output_dir: Local output directory containing checkpoints
+        """
+        self.s3_save_path = s3_save_path.rstrip('/') + '/'
+        self.output_dir = output_dir
+
+    def _sync_to_s3(self):
+        """Sync entire output directory to S3 using s5cmd."""
+        try:
+            # Build s5cmd sync command
+            # Using --delete to remove files in S3 that don't exist locally
+            cmd = [
+                "s5cmd",
+                "sync",
+                "--delete",
+                "--exclude", "*.lock",  # Exclude lock files
+                "--exclude", ".git/*",   # Exclude git files if any
+                f"{self.output_dir}/*",
+                self.s3_save_path
+            ]
+
+            logger.info(f"Syncing entire output directory to S3: {self.output_dir} -> {self.s3_save_path}")
+            logger.debug(f"Running command: {' '.join(cmd)}")
+
+            # Run s5cmd
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=300  # 5 minute timeout
+            )
+
+            if result.returncode == 0:
+                logger.info(f"Successfully synced to S3: {self.s3_save_path}")
+            else:
+                logger.error(f"Failed to sync to S3. Return code: {result.returncode}")
+                logger.error(f"stderr: {result.stderr}")
+                logger.error(f"stdout: {result.stdout}")
+
+        except subprocess.TimeoutExpired:
+            logger.error(f"S3 sync timed out after 5 minutes")
+        except FileNotFoundError:
+            logger.error("s5cmd not found. Please ensure s5cmd is installed and in PATH")
+        except Exception as e:
+            logger.error(f"Error syncing to S3: {e}")
+
+    def on_save(self, args, state, control, **kwargs):
+        """Called after a checkpoint is saved."""
+        # Only sync on main process
+        if is_main_process():
+            self._sync_to_s3()
+
+    def on_train_end(self, args, state, control, **kwargs):
+        """Called at the end of training."""
+        # Final sync at the end of training
+        if is_main_process():
+            logger.info("Final S3 sync at end of training")
+            self._sync_to_s3()
 
 
 def get_rank():
@@ -1099,6 +1168,12 @@ def main():
     )
     parser.add_argument("--num_iterations", type=int, default=1, help="Number of GRPO iterations (default: 1)")
     parser.add_argument("--num_generations", type=int, default=28, help="Number of generations per prompt (default: 28)")
+    parser.add_argument(
+        "--s3_save_path",
+        type=str,
+        default=None,
+        help="S3 path to sync checkpoints to (e.g., s3://bucket/path/). If provided, will sync checkpoints to S3 using s5cmd after each save."
+    )
 
     args = parser.parse_args()
 
@@ -1296,6 +1371,11 @@ def main():
     if args.reward_bench is not None:
         logger.info("Adding DetailedRewardLoggingCallback for bench reward statistics")
         trainer.add_callback(DetailedRewardLoggingCallback())
+
+    # Add S3 sync callback if s3_save_path is provided
+    if args.s3_save_path is not None:
+        logger.info(f"Adding S3SyncCallback to sync checkpoints to {args.s3_save_path}")
+        trainer.add_callback(S3SyncCallback(args.s3_save_path, args.output_dir))
 
     # Start training
     logger.info("Starting GRPO training")
