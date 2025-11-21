@@ -1329,8 +1329,8 @@ def main():
         per_device_eval_batch_size=args.per_device_eval_batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         learning_rate=args.learning_rate,
-        logging_steps=10,
-        save_steps=50,
+        logging_steps=5,
+        save_steps=25
         save_total_limit=30,
         eval_steps=50,
         warmup_steps=args.warmup_steps,
