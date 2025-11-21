@@ -350,6 +350,28 @@ ACTUAL_OUTPUT_DIR="{local_output_dir.replace('$BEAKER_WORKLOAD_ID', '${BEAKER_WO
 echo "Creating output directory: $ACTUAL_OUTPUT_DIR"
 mkdir -p "$ACTUAL_OUTPUT_DIR"
 
+# Sync existing checkpoints from S3 if they exist
+S3_PATH="{s3_output_path.replace('$BEAKER_WORKLOAD_ID', '${BEAKER_WORKLOAD_ID}') if s3_output_path else ''}"
+RESUME_FLAG=""
+if [ ! -z "$S3_PATH" ]; then
+    echo "Checking for existing checkpoints in S3: $S3_PATH"
+    # Use s5cmd ls to check if the path exists
+    if s5cmd ls "$S3_PATH/" 2>/dev/null | grep -q "checkpoint-"; then
+        echo "Found existing checkpoints, syncing from S3..."
+        s5cmd sync "$S3_PATH/*" "$ACTUAL_OUTPUT_DIR/" || true
+        echo "Checkpoint sync complete. Contents of output directory:"
+        ls -la "$ACTUAL_OUTPUT_DIR"
+
+        # Check if any checkpoints exist after sync
+        if ls -d "$ACTUAL_OUTPUT_DIR"/checkpoint-* 2>/dev/null >/dev/null; then
+            echo "Checkpoints found in output directory - will resume training"
+            RESUME_FLAG=" --resume_from_checkpoint"
+        fi
+    else
+        echo "No existing checkpoints found in S3"
+    fi
+fi
+
 # Start VLLM server in background (output goes to console)
 echo 'Starting VLLM server on GPUs {vllm_gpu_str} with data parallel...'
 CUDA_VISIBLE_DEVICES={vllm_gpu_str} trl vllm-serve --model {vllm_model_arg} --port 8000 --gpu-memory-utilization 0.5 --max-model-len 16384 --data-parallel-size {num_generate_gpus} &
@@ -375,6 +397,8 @@ echo 'BEAKER_WORKLOAD_ID: '$BEAKER_WORKLOAD_ID
 # Replace placeholder with actual workload ID in the command
 GRPO_CMD="{grpo_cmd}"
 GRPO_CMD="${{GRPO_CMD//\$BEAKER_WORKLOAD_ID/$BEAKER_WORKLOAD_ID}}"
+# Add resume flag if checkpoints were found
+GRPO_CMD="$GRPO_CMD$RESUME_FLAG"
 echo "Running command: $GRPO_CMD"
 eval "$GRPO_CMD"
 

@@ -1174,6 +1174,11 @@ def main():
         default=None,
         help="S3 path to sync checkpoints to (e.g., s3://bucket/path/). If provided, will sync checkpoints to S3 using s5cmd after each save."
     )
+    parser.add_argument(
+        "--resume_from_checkpoint",
+        action="store_true",
+        help="Resume training from the latest checkpoint in output_dir if one exists"
+    )
 
     args = parser.parse_args()
 
@@ -1380,7 +1385,12 @@ def main():
     # Start training
     logger.info("Starting GRPO training")
     try:
-        trainer.train()
+        if args.resume_from_checkpoint:
+            logger.info("Resume from checkpoint flag is set - will resume from latest checkpoint if available")
+            trainer.train(resume_from_checkpoint=True)
+        else:
+            logger.info("Starting training from scratch")
+            trainer.train()
 
         # Save final model
         logger.info(f"Saving final model to {args.output_dir}/step-final")
