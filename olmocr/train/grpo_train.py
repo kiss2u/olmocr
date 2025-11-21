@@ -803,15 +803,15 @@ def reward_front_matter(prompts, completions: list[str] | list[list[dict]], clau
         else:
             model_response_markdown = ""
 
-        reward = 0.0
+        reward = 0
 
         try:
             # Try to parse the completion
             front_matter, text = parser._extract_front_matter_and_text(model_response_markdown)
             completion_response = parser._parse_front_matter(front_matter, text)
 
-            # Parsing succeeded - base reward of 0.5
-            reward = 0.5
+            # Parsing succeeded - base reward of 5/10 points
+            reward = 5
             logger.debug(f"Completion {i}: Successfully parsed frontmatter (base reward: 0.5)")
 
             # Try to compare with claude_original if available
@@ -829,7 +829,7 @@ def reward_front_matter(prompts, completions: list[str] | list[list[dict]], clau
 
                         if completion_value == claude_value:
                             fields_matched += 1
-                            reward += 0.1
+                            reward += 1
                             logger.debug(f"  Field {field} matches: {completion_value}")
                         else:
                             logger.debug(f"  Field {field} mismatch: completion={completion_value}, claude={claude_value}")
@@ -844,10 +844,10 @@ def reward_front_matter(prompts, completions: list[str] | list[list[dict]], clau
 
         except Exception as e:
             # Any parsing error results in 0 reward
-            reward = 0.0
+            reward = 0
             logger.debug(f"Completion {i}: Failed to parse frontmatter - {type(e).__name__}: {str(e)}")
 
-        rewards.append(reward)
+        rewards.append(reward / 10.0)
 
     # Log summary statistics
     zero_rewards = sum(1 for r in rewards if r == 0.0)
@@ -1330,7 +1330,7 @@ def main():
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         learning_rate=args.learning_rate,
         logging_steps=5,
-        save_steps=25
+        save_steps=25,
         save_total_limit=30,
         eval_steps=50,
         warmup_steps=args.warmup_steps,
