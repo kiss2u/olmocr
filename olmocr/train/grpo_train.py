@@ -252,7 +252,7 @@ class S3SyncCallback(TrainerCallback):
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=300  # 5 minute timeout
+                timeout=60*25  # 25 minute timeout
             )
 
             if result.returncode == 0:
