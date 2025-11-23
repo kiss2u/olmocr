@@ -1117,6 +1117,13 @@ def main():
         choices=["group", "batch", "none"],
         help="Scaling strategy for rewards: 'group' (scale by std within each group), 'batch' (scale by std across batch), or 'none' (no scaling). Default: 'group'",
     )
+    parser.add_argument(
+        "--lr_schedule",
+        type=str,
+        default="linear",
+        choices=["linear", "constant"],
+        help="Choose learning rate schedule type"
+    )
     parser.add_argument("--beta", type=float, default=0.0, help="KL coefficient for reference model (default: 0.0, no reference model)")
     parser.add_argument(
         "--importance_sampling_level", type=str, default="token", choices=["token", "sequence"], help="Level for importance sampling ratios (default: token)"
@@ -1360,6 +1367,9 @@ def main():
         log_completions=True,
         num_completions_to_print=2,
     )
+
+    if args.lr_schedule == "constant":
+        grpo_config.set_lr_scheduler("constant")
 
     # Initialize GRPO trainer
     logger.info("Initializing GRPO trainer")
