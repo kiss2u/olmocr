@@ -138,7 +138,6 @@ task_spec = TaskSpec(
         EnvVar(name="WANDB_API_KEY", secret="JAKE_WANDB_API_KEY")
     ],
     datasets=[
-        DataMount.new(mount_path="/weka/oe-data-default", weka="oe-data-default"),
         DataMount.new(mount_path="/weka/oe-training-default", weka="oe-training-default"),
     ]
 )
