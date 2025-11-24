@@ -1915,7 +1915,83 @@ def apply_jpeg_compression(pdf_path, quality, temp_dir):
         return False
 
 
-async def process_pdf(pdf_info, args, client, pdf_filter=None):
+def check_outputs_exist(pdf_id: str, page_num: int, args, existing_test_pdfs: set) -> bool:
+    """
+    Check if all output files for a given PDF already exist.
+
+    Returns True if all outputs exist and processing can be skipped.
+    """
+    # Define expected output paths
+    html_dir = os.path.join(args.output_dir, "html", args.name)
+    pdfs_dir = os.path.join(args.output_dir, "pdfs", args.name)
+    training_dir = os.path.join(args.output_dir, "training", args.name)
+    bench_data_dir = os.path.join(args.output_dir, "bench_data")
+    claude_original_dir = os.path.join(bench_data_dir, "claude_original", args.name)
+
+    base_filename = f"{pdf_id}_page{page_num}"
+
+    # Check HTML file
+    html_path = os.path.join(html_dir, f"{base_filename}.html")
+    if not os.path.exists(html_path):
+        return False
+
+    # Check rendered PDF in pdfs dir
+    pdf_path = os.path.join(pdfs_dir, f"{base_filename}.pdf")
+    if not os.path.exists(pdf_path):
+        return False
+
+    # Check markdown in training dir
+    markdown_path = os.path.join(training_dir, f"{base_filename}.md")
+    if not os.path.exists(markdown_path):
+        return False
+
+    # Check symlink in training dir
+    pdf_link_path = os.path.join(training_dir, f"{base_filename}.pdf")
+    if not os.path.exists(pdf_link_path) and not os.path.islink(pdf_link_path):
+        return False
+
+    # Check claude_original symlink
+    claude_md_link_path = os.path.join(claude_original_dir, f"{base_filename}_pg1_repeat1.md")
+    if not os.path.exists(claude_md_link_path) and not os.path.islink(claude_md_link_path):
+        return False
+
+    # Check that bench data has at least one test for this PDF
+    expected_test_pdf = f"{args.name}/{base_filename}.pdf"
+    if expected_test_pdf not in existing_test_pdfs:
+        return False
+
+    return True
+
+
+def load_existing_test_pdfs(args) -> set:
+    """
+    Load existing test PDFs from the bench data JSONL file.
+
+    Returns a set of PDF paths that already have tests.
+    """
+    bench_data_dir = os.path.join(args.output_dir, "bench_data")
+    synthetic_json_path = os.path.join(bench_data_dir, f"{args.name}.jsonl")
+
+    existing_pdfs = set()
+    if os.path.exists(synthetic_json_path):
+        try:
+            with open(synthetic_json_path, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        try:
+                            test = json.loads(line)
+                            if "pdf" in test:
+                                existing_pdfs.add(test["pdf"])
+                        except json.JSONDecodeError:
+                            continue
+        except Exception as e:
+            print(f"Warning: Could not read existing bench data: {e}")
+
+    return existing_pdfs
+
+
+async def process_pdf(pdf_info, args, client, pdf_filter=None, existing_test_pdfs=None):
     """Process a single PDF, render a random page, and create an HTML template."""
     pdf_path, index = pdf_info
 
@@ -1959,6 +2035,11 @@ async def process_pdf(pdf_info, args, client, pdf_filter=None):
 
         # Select a random page
         page_num = random_generator.randint(1, num_pages)
+
+        # Check if this PDF has already been processed (skip logic for resume)
+        if existing_test_pdfs is not None and check_outputs_exist(pdf_id, page_num, args, existing_test_pdfs):
+            print(f"Skipping {pdf_id} page {page_num} - already processed")
+            return {"skipped": True, "pdf_id": pdf_id, "page_number": page_num}
 
         # Render the page as a base64 PNG (run in thread pool since it's blocking I/O)
         loop = asyncio.get_event_loop()
@@ -2204,13 +2285,16 @@ async def main():
     bench_data_dir = os.path.join(args.output_dir, "bench_data")
     os.makedirs(bench_data_dir, exist_ok=True)
     synthetic_json_path = os.path.join(bench_data_dir, f"{args.name}.jsonl")
-    open(synthetic_json_path, "w").close()  # Create empty file
+
+    # Load existing test PDFs for skip logic (resume support)
+    existing_test_pdfs = load_existing_test_pdfs(args)
+    if existing_test_pdfs:
+        print(f"Found {len(existing_test_pdfs)} existing PDFs with tests - will skip already processed items")
 
     # Initialize the metadata JSONL file
     metadata_dir = os.path.join(args.output_dir, "metadata")
     os.makedirs(metadata_dir, exist_ok=True)
     metadata_json_path = os.path.join(metadata_dir, f"{args.name}.jsonl")
-    open(metadata_json_path, "w").close()  # Create empty file
 
     # Counter for test statistics
     test_counter = 0
@@ -2221,6 +2305,7 @@ async def main():
     total_attempted = 0
     successful_templates = 0
     failed_templates = 0
+    skipped_templates = 0
     failure_reasons = defaultdict(int)
 
     # Initialize an asyncio lock for file access
@@ -2235,7 +2320,15 @@ async def main():
             total_attempted += 1
 
         try:
-            result = await process_pdf(pdf_info, args, client, pdf_filter)
+            result = await process_pdf(pdf_info, args, client, pdf_filter, existing_test_pdfs)
+
+            # Handle skipped results (already processed)
+            if result and result.get("skipped"):
+                nonlocal skipped_templates
+                async with file_lock:
+                    skipped_templates += 1
+                return result
+
             if result and result.get("tests"):
                 # Append tests to synthetic.json as they're created (JSONL format)
                 async with file_lock:
@@ -2323,6 +2416,7 @@ async def main():
     print("\n===== Template Generation Summary =====")
     print(f"Total PDFs attempted: {total_attempted}")
     if total_attempted > 0:
+        print(f"Skipped (already processed): {skipped_templates} ({skipped_templates/total_attempted*100:.1f}%)")
         print(f"Successfully generated: {successful_templates} ({successful_templates/total_attempted*100:.1f}%)")
         print(f"Failed: {failed_templates} ({failed_templates/total_attempted*100:.1f}%)")
     else:
