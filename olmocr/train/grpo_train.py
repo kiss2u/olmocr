@@ -168,8 +168,34 @@ class DetailedRewardLogger:
 
         return summary
 
+    def _gather_across_ranks(self):
+        """Gather accumulated stats from all ranks to rank 0."""
+        if not (dist.is_available() and dist.is_initialized()):
+            return
+
+        world_size = dist.get_world_size()
+        gathered = [None] * world_size
+        dist.all_gather_object(gathered, self.accumulated_stats)
+
+        if is_main_process():
+            # Merge all stats into self.accumulated_stats
+            merged = self.accumulated_stats
+            for other in gathered[1:]:  # Skip rank 0 (already in merged)
+                merged["total_completions"] += other["total_completions"]
+                merged["overall"]["passed"] += other["overall"]["passed"]
+                merged["overall"]["total"] += other["overall"]["total"]
+                for t, s in other["by_type"].items():
+                    merged["by_type"][t]["total_passed"] += s["total_passed"]
+                    merged["by_type"][t]["total_tests"] += s["total_tests"]
+                    merged["by_type"][t]["completion_count"] += s["completion_count"]
+                for j, s in other["by_jsonl"].items():
+                    merged["by_jsonl"][j]["total_passed"] += s["total_passed"]
+                    merged["by_jsonl"][j]["total_tests"] += s["total_tests"]
+                    merged["by_jsonl"][j]["completion_count"] += s["completion_count"]
+
     def log_to_wandb(self, step: int):
         """Log accumulated statistics to wandb."""
+        self._gather_across_ranks()
         if is_main_process():
             summary = self.get_summary_stats()
             wandb.log(summary) # Don't pass in step to wandb, or else it can get confused
