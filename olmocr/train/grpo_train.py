@@ -175,7 +175,14 @@ class DetailedRewardLogger:
 
         world_size = dist.get_world_size()
         gathered = [None] * world_size
-        dist.all_gather_object(gathered, self.accumulated_stats)
+        # Convert defaultdicts to regular dicts for pickling
+        stats_to_send = {
+            "total_completions": self.accumulated_stats["total_completions"],
+            "overall": self.accumulated_stats["overall"],
+            "by_type": dict(self.accumulated_stats["by_type"]),
+            "by_jsonl": dict(self.accumulated_stats["by_jsonl"]),
+        }
+        dist.all_gather_object(gathered, stats_to_send)
 
         if is_main_process():
             # Merge all stats into self.accumulated_stats
