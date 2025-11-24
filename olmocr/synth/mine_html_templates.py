@@ -2259,7 +2259,7 @@ async def main():
     pdf_paths = []
 
     if os.path.isdir(args.input_list):
-        pdf_paths = list(glob.glob(os.path.join(args.input_list, "*.pdf"), recursive=True))
+        pdf_paths = list(sorted(glob.glob(os.path.join(args.input_list, "*.pdf"), recursive=True)))
     else:
         with open(args.input_list, "r") as f:
             for i, line in enumerate(tqdm(f)):
