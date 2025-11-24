@@ -2,7 +2,7 @@
 
 # Project metadata
 project_name: olmocr-qwen-vl-training
-run_name: qwen25_vl_olmocrv5_synth10k_test1
+run_name: qwen25_vl_olmocrv5_regular_with_synth_v1
 
 # Model configuration
 model:
@@ -46,8 +46,8 @@ dataset:
         - name: Tokenizer
           masking_index: -100
           end_of_message_token: "<|im_end|>"
-    - name: processed_00_documents_train_s2pdf
-      root_dir: /data/olmOCR-mix-1025/processed_00_documents_train_s2pdf/
+    - name: processed_00_documents_train
+      root_dir: /data/olmOCR-mix-1225-devel/processed_00_documents_train/
       pipeline: *basic_pipeline
     - name: processed_02_loc_transcripts_train
       root_dir: /data/olmOCR-mix-1225-devel/processed_02_loc_transcripts_train/

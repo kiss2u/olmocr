@@ -2,7 +2,7 @@
 
 # Project metadata
 project_name: olmocr-qwen-vl-training
-run_name: qwen25_vl_olmocrv5_synth10k_test1
+run_name: qwen25_vl_olmocrv5_synth10postfinetune_v1
 
 # Model configuration
 model:

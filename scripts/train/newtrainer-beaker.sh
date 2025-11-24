@@ -104,7 +104,7 @@ dataset_name = dataset.rstrip('/').split('/')[-1]
 commands = [
     "pip install .[train]",
     "pip install transformers==4.57.1",
-    "pip install flash-attn==2.8.0.post2 --no-build-isolation",
+    "pip install flash-attn --no-build-isolation",
     "pip install s5cmd",
     f"s5cmd sync {dataset}/processed_* /data/{dataset_name}/",
     "s5cmd sync s3://ai2-oe-data/jakep/olmocr/qwen2.5-vl-7b-olmocrv4_1epoch_promptv4_mix1025_more_rotation-8372/* /data/models/qwen2.5-vl-7b-olmocrv4_1epoch_promptv4_mix1025_more_rotation-8372",
