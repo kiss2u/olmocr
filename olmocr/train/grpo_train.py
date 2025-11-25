@@ -45,6 +45,11 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _make_type_stats():
+    """Factory function for creating type stats dicts (picklable, unlike lambdas)."""
+    return {"total_passed": 0, "total_tests": 0, "completion_count": 0}
+
+
 class DetailedRewardLogger:
     """Aggregates and logs detailed reward statistics by test type and JSONL file."""
 
@@ -55,8 +60,8 @@ class DetailedRewardLogger:
         self.batch_stats = []
         self.accumulated_stats = {
             "total_completions": 0,
-            "by_type": defaultdict(lambda: {"total_passed": 0, "total_tests": 0, "completion_count": 0}),
-            "by_jsonl": defaultdict(lambda: {"total_passed": 0, "total_tests": 0, "completion_count": 0}),
+            "by_type": defaultdict(_make_type_stats),
+            "by_jsonl": defaultdict(_make_type_stats),
             "overall": {"passed": 0, "total": 0}
         }
 
