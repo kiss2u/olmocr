@@ -1192,6 +1192,8 @@ def main():
     parser.add_argument(
         "--importance_sampling_level", type=str, default="token", choices=["token", "sequence"], help="Level for importance sampling ratios (default: token)"
     )
+    parser.add_argument("--temperature", type=float, default=0.8, help="Default sampling temperature")
+    parser.add_argument("--top_p", type=float, default=1.0, help="Set to a value ex 0.9 to enable top_p nucleus sampling")
     parser.add_argument(
         "--reward_bench", nargs="?", const=1.0, type=float, default=None, help="Use bench-based reward function with optional weight (default: 1.0)"
     )
@@ -1429,7 +1431,8 @@ def main():
         warmup_steps=args.warmup_steps,
         max_prompt_length=3000,
         max_completion_length=8000,
-        temperature=0.8,
+        temperature=args.temperature,
+        top_p=args.top_p,
         report_to=report_to,
         remove_unused_columns=False,
         bf16=True,
