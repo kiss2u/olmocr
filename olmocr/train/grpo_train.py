@@ -1464,7 +1464,7 @@ def main():
     )
 
     # Add the callback for detailed reward logging
-    if args.reward_bench is not None:
+    if args.reward_bench is not None or args.reward_bench_macroavg is not None:
         logger.info("Adding DetailedRewardLoggingCallback for bench reward statistics")
         trainer.add_callback(DetailedRewardLoggingCallback())
 
