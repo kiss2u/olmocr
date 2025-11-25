@@ -1032,6 +1032,7 @@ def olmocr_bench_reward(
     pdf_path: list[str],
     jsonl_file: list[str],
     test_ids: list[list[str]],
+    macro_average: bool = False,
     **kwargs,
 ):
     """
@@ -1049,12 +1050,16 @@ def olmocr_bench_reward(
         pdf_path: List of PDF file paths (one per completion)
         jsonl_file: List of JSONL file paths containing test definitions (one per completion)
         test_ids: List of test ID lists associated with each PDF page (one list per completion)
+        macro_average: If True, calculate reward as the average of per-category pass rates
+                      (macro-average), so each TestType category contributes equally.
+                      If False (default), calculate as total passed / total tests (micro-average).
         **kwargs: Additional arguments
 
     Returns:
         List of reward scores (float) based on test pass rates, or None for errors
     """
-    logger.info(f"Running olmocr bench reward function for {len(completions)} completions")
+    avg_type = "macro-averaged" if macro_average else "micro-averaged"
+    logger.info(f"Running olmocr bench reward function ({avg_type}) for {len(completions)} completions")
 
     # Prepare arguments for parallel processing
     eval_args = []
@@ -1078,8 +1083,22 @@ def olmocr_bench_reward(
         # Collect results as they complete (but maintain order)
         for future in futures:
             idx, reward, stats = future.result()
-            rewards[idx] = reward
             detailed_stats[idx] = stats
+
+            if macro_average and stats is not None and "by_type" in stats:
+                # Calculate macro-averaged reward: average of per-category pass rates
+                category_pass_rates = []
+                for test_type, type_stats in stats["by_type"].items():
+                    if type_stats["total"] > 0:
+                        category_pass_rates.append(type_stats["passed"] / type_stats["total"])
+
+                if category_pass_rates:
+                    rewards[idx] = sum(category_pass_rates) / len(category_pass_rates)
+                else:
+                    rewards[idx] = reward  # Fall back to micro-average if no categories
+            else:
+                # Use micro-averaged reward (total passed / total tests)
+                rewards[idx] = reward
 
     # Log detailed statistics using the global logger
     detailed_reward_logger.add_batch_stats(detailed_stats)
@@ -1087,9 +1106,16 @@ def olmocr_bench_reward(
     # Log batch summary for immediate feedback
     if is_main_process():
         batch_summary = detailed_reward_logger.get_batch_summary(detailed_stats)
-        logger.info("Batch summary:")
+        logger.info(f"Batch summary ({avg_type}):")
         if batch_summary["overall"]["total"] > 0:
-            logger.info(f"  Overall: {batch_summary['overall']['pass_rate']:.3f} ({batch_summary['overall']['passed']}/{batch_summary['overall']['total']})")
+            logger.info(f"  Overall (micro): {batch_summary['overall']['pass_rate']:.3f} ({batch_summary['overall']['passed']}/{batch_summary['overall']['total']})")
+
+        # Log by test type (useful for understanding macro-average)
+        if batch_summary["by_type"]:
+            logger.info("  By test type:")
+            for test_type, stats in sorted(batch_summary["by_type"].items()):
+                if stats["total"] > 0:
+                    logger.info(f"    {test_type}: {stats['pass_rate']:.3f} ({stats['passed']}/{stats['total']})")
 
         # Log by JSONL file
         if batch_summary["by_jsonl"]:
@@ -1163,6 +1189,14 @@ def main():
     )
     parser.add_argument(
         "--reward_bench", nargs="?", const=1.0, type=float, default=None, help="Use bench-based reward function with optional weight (default: 1.0)"
+    )
+    parser.add_argument(
+        "--reward_bench_macroavg",
+        nargs="?",
+        const=1.0,
+        type=float,
+        default=None,
+        help="Use bench-based reward with macro-averaging across test categories (each TestType contributes equally) with optional weight (default: 1.0)",
     )
     parser.add_argument(
         "--reward_medoid", nargs="?", const=1.0, type=float, default=None, help="Use medoid-based reward function with optional weight (default: 1.0)"
@@ -1308,6 +1342,20 @@ def main():
         reward_names.append("bench")
         logger.info(f"Added bench-based reward function with weight {args.reward_bench}")
 
+    if args.reward_bench_macroavg is not None:
+        # Create a wrapper function that calls olmocr_bench_reward with macro_average=True
+        def olmocr_bench_reward_macroavg(prompts, completions, completion_ids, pdf_path, jsonl_file, test_ids, **kwargs):
+            return olmocr_bench_reward(
+                prompts, completions, completion_ids, pdf_path, jsonl_file, test_ids,
+                macro_average=True, **kwargs
+            )
+
+        olmocr_bench_reward_macroavg.__name__ = "olmocr_bench_reward_macroavg"
+        reward_funcs.append(olmocr_bench_reward_macroavg)
+        reward_weights.append(args.reward_bench_macroavg)
+        reward_names.append("bench_macroavg")
+        logger.info(f"Added bench-based macro-averaged reward function with weight {args.reward_bench_macroavg}")
+
     if args.reward_medoid is not None:
         reward_funcs.append(medoid_reward)
         reward_weights.append(args.reward_medoid)
@@ -1349,7 +1397,7 @@ def main():
 
     if not reward_funcs:
         logger.error(
-            "No reward function specified. Use at least one of: --reward_bench, --reward_medoid, --reward_bench_edit_distance, --reward_front_matter, --reward_element_count, --reward_eos"
+            "No reward function specified. Use at least one of: --reward_bench, --reward_bench_macroavg, --reward_medoid, --reward_bench_edit_distance, --reward_front_matter, --reward_element_count, --reward_eos"
         )
         return
 
