@@ -13,7 +13,7 @@
 # Same thing, but using more gradient accumulation steps
 ./scripts/train/grpotrainer-beaker-multi-gpu.sh --num-train-gpus 7 --num-generate-gpus 1 --model_name s3://ai2-oe-data/jakep/olmocr/qwen25_vl_olmocrv5_synth10postfinetune_v1-266 \
 --train_bench_data_folder /data/jakep/grpo_data_mixes/synth_mix_1225/bench_data \
---jsonl_filter "arxiv|olmocr_mix_documents"
+--jsonl_filter "arxiv|olmocr_mix_documents" \
 --reward_bench 1.0 --reward_front_matter 1.0 --reward_eos 1.0 \
 --beta 0.01 \
 --seed 1 --importance_sampling_level sequence \
@@ -25,7 +25,7 @@
 # Same thing with constant lr schedule
 ./scripts/train/grpotrainer-beaker-multi-gpu.sh --num-train-gpus 7 --num-generate-gpus 1 --model_name s3://ai2-oe-data/jakep/olmocr/qwen25_vl_olmocrv5_synth10postfinetune_v1-266 \
 --train_bench_data_folder /data/jakep/grpo_data_mixes/synth_mix_1225/bench_data \
---jsonl_filter "arxiv|olmocr_mix_documents"
+--jsonl_filter "arxiv|olmocr_mix_documents" \
 --reward_bench 1.0 --reward_front_matter 1.0 --reward_eos 1.0 \
 --beta 0.01 \
 --seed 1 --importance_sampling_level sequence \
@@ -37,7 +37,7 @@
 # Same thing but with top p = 0.9
 ./scripts/train/grpotrainer-beaker-multi-gpu.sh --num-train-gpus 7 --num-generate-gpus 1 --model_name s3://ai2-oe-data/jakep/olmocr/qwen25_vl_olmocrv5_synth10postfinetune_v1-266 \
 --train_bench_data_folder /data/jakep/grpo_data_mixes/synth_mix_1225/bench_data \
---jsonl_filter "arxiv|olmocr_mix_documents"
+--jsonl_filter "arxiv|olmocr_mix_documents" \
 --reward_bench 1.0 --reward_front_matter 1.0 --reward_eos 1.0 \
 --beta 0.01 \
 --seed 1 --importance_sampling_level sequence \
@@ -50,7 +50,7 @@
 # Same thing with macroavg reward
 ./scripts/train/grpotrainer-beaker-multi-gpu.sh --num-train-gpus 7 --num-generate-gpus 1 --model_name s3://ai2-oe-data/jakep/olmocr/qwen25_vl_olmocrv5_synth10postfinetune_v1-266 \
 --train_bench_data_folder /data/jakep/grpo_data_mixes/synth_mix_1225/bench_data \
---jsonl_filter "arxiv|olmocr_mix_documents"
+--jsonl_filter "arxiv|olmocr_mix_documents" \
 --reward_bench_macroavg 1.0 --reward_front_matter 1.0 --reward_eos 1.0 \
 --beta 0.01 \
 --seed 1 --importance_sampling_level sequence \
@@ -62,11 +62,23 @@
 # Same thing with more data 
 ./scripts/train/grpotrainer-beaker-multi-gpu.sh --num-train-gpus 7 --num-generate-gpus 1 --model_name s3://ai2-oe-data/jakep/olmocr/qwen25_vl_olmocrv5_synth10postfinetune_v1-266 \
 --train_bench_data_folder /data/jakep/grpo_data_mixes/synth_mix_1225/bench_data \
---jsonl_filter "arxiv|general_10k|big_tables"
+--jsonl_filter "arxiv|general_10k|big_tables" \
 --reward_bench 1.0 --reward_front_matter 1.0 --reward_eos 1.0 \
 --beta 0.01 \
 --seed 1 --importance_sampling_level sequence \
 --num_generations 28 --gradient_accumulation_steps 28 \
 --learning_rate 2e-6 \
 --name qwen25vl_olmocrv5_arxiv10k_general10k_bigtables_postfinetune \
+--preemptible
+
+# YOLO run
+./scripts/train/grpotrainer-beaker-multi-gpu.sh --num-train-gpus 7 --num-generate-gpus 1 --model_name s3://ai2-oe-data/jakep/olmocr/qwen25_vl_olmocrv5_synth10postfinetune_v1-266 \
+--train_bench_data_folder /data/jakep/grpo_data_mixes/synth_mix_1225/bench_data \
+--jsonl_filter "arxiv|general_10k|big_tables" \
+--reward_bench_macroavg 1.0 --reward_front_matter 1.0 --reward_eos 1.0 \
+--beta 0.01 \
+--seed 1 --importance_sampling_level sequence \
+--num_generations 28 --gradient_accumulation_steps 84 \
+--learning_rate 1e-6 --lr_schedule_constant \
+--name qwen25vl_olmocrv5_arxiv10k_mix10k_postfinetune_yolo \
 --preemptible
