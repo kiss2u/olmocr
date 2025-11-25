@@ -30,7 +30,7 @@
 --beta 0.01 \
 --seed 1 --importance_sampling_level sequence \
 --num_generations 28 --gradient_accumulation_steps 28 \
---learning_rate 2e-6 --lr_schedule_constant \
+--learning_rate 2e-6 --lr_schedule constant \
 --name qwen25vl_olmocrv5_arxiv10k_mix10k_postfinetune_constnt \
 --preemptible
 
@@ -55,7 +55,7 @@
 --beta 0.01 \
 --seed 1 --importance_sampling_level sequence \
 --num_generations 28 --gradient_accumulation_steps 28 \
---learning_rate 2e-6 --lr_schedule_constant \
+--learning_rate 2e-6 \
 --name qwen25vl_olmocrv5_arxiv10k_mix10k_postfinetune_macroavg \
 --preemptible
 
@@ -79,6 +79,6 @@
 --beta 0.01 \
 --seed 1 --importance_sampling_level sequence \
 --num_generations 28 --gradient_accumulation_steps 84 \
---learning_rate 1e-6 --lr_schedule_constant \
+--learning_rate 1e-6 --lr_schedule constant \
 --name qwen25vl_olmocrv5_arxiv10k_mix10k_postfinetune_yolo \
 --preemptible
