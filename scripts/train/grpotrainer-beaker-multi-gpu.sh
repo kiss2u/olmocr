@@ -300,7 +300,7 @@ for i, arg in enumerate(modified_args):
         continue
     filtered_args.append(arg)
 
-grpo_cmd += " " + " ".join(filtered_args)
+grpo_cmd += " " + " ".join(shlex.quote(arg) for arg in filtered_args)
 
 # Create a bash script as a single command string with S3 sync
 # S3 sync will be handled directly in the cleanup function
