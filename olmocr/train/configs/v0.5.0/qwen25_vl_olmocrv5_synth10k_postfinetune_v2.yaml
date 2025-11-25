@@ -59,7 +59,7 @@ dataset:
     - name: big_tables2
       root_dir: /data/olmOCR-mix-1225-devel/processed_big_tables/
       pipeline: *basic_pipeline
-    - name: big_tables2
+    - name: big_tables3
       root_dir: /data/olmOCR-mix-1225-devel/processed_big_tables/
       pipeline: *basic_pipeline        
         
