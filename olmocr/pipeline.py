@@ -92,6 +92,42 @@ max_concurrent_requests_limit = asyncio.BoundedSemaphore(1)  # Actual value set 
 get_pdf_filter = cache(lambda: PdfFilter(languages_to_keep={Language.ENGLISH, None}, apply_download_spam_check=True, apply_form_check=True))
 
 
+def get_markdown_path(workspace: str, source_file: str) -> str:
+    """
+    Calculate the markdown output path for a given source file.
+
+    Args:
+        workspace: The workspace directory path
+        source_file: The original source file path (can be S3 or local)
+
+    Returns:
+        The full path where the markdown file should be written
+    """
+    if source_file.startswith("s3://"):
+        # Extract the path after the bucket name for S3 sources
+        parsed = urlparse(source_file)
+        relative_path = parsed.path.lstrip("/")
+    else:
+        # For local files, strip leading slash to make it relative
+        relative_path = source_file.lstrip("/")
+
+    # Sanitize path: remove any .. components to prevent path traversal
+    parts = relative_path.split("/")
+    safe_parts = [p for p in parts if p and p != ".."]
+    relative_path = "/".join(safe_parts)
+
+    # Change the extension to .md
+    md_filename = os.path.splitext(os.path.basename(relative_path))[0] + ".md"
+    # Get the directory path without the filename
+    dir_path = os.path.dirname(relative_path)
+
+    # Create the output markdown path
+    markdown_dir = os.path.join(workspace, "markdown", dir_path)
+    markdown_path = os.path.join(markdown_dir, md_filename)
+
+    return markdown_path
+
+
 @dataclass(frozen=True)
 class PageResult:
     s3_path: str
@@ -578,23 +614,8 @@ async def worker(args, work_queue: WorkQueue, semaphore, worker_id):
                     source_file = doc["metadata"]["Source-File"]
                     natural_text = doc["text"]
 
-                    # Create the output markdown path that preserves the folder structure
-                    if source_file.startswith("s3://"):
-                        # Extract the path after the bucket name for S3 sources
-                        parsed = urlparse(source_file)
-                        relative_path = parsed.path.lstrip("/")
-                    else:
-                        # For local files, use the full path
-                        relative_path = source_file
-
-                    # Change the extension to .md
-                    md_filename = os.path.splitext(os.path.basename(relative_path))[0] + ".md"
-                    # Get the directory path without the filename
-                    dir_path = os.path.dirname(relative_path)
-
-                    # Create the output markdown path
-                    markdown_dir = os.path.join(args.workspace, "markdown", dir_path)
-                    markdown_path = os.path.join(markdown_dir, md_filename)
+                    markdown_path = get_markdown_path(args.workspace, source_file)
+                    markdown_dir = os.path.dirname(markdown_path)
 
                     # Create the directory structure if it doesn't exist
                     if markdown_path.startswith("s3://"):
