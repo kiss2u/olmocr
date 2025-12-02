@@ -200,3 +200,17 @@
 --top_p 0.9 \
 --name qwen25vl_olmocrv5_arxiv10k_mix10k_postfinetune_yolo_v2_trl_nightly_sequence_truncate \
 --preemptible
+
+# TRL nightly with general_10k mix, for a cleaner story
+./scripts/train/grpotrainer-beaker-multi-gpu.sh --num-train-gpus 7 --num-generate-gpus 1 --model_name s3://ai2-oe-data/jakep/olmocr/qwen25_vl_olmocrv5_synth10postfinetune_v2-960 \
+--train_bench_data_folder /data/jakep/grpo_data_mixes/synth_mix_1225/bench_data \
+--jsonl_filter "arxiv|general_10k$" \
+--reward_bench_macroavg 1.0 --reward_front_matter 1.0 --reward_eos 1.0 \
+--beta 0.01 \
+--seed 1 --importance_sampling_level sequence \
+--vllm_importance_sampling_correction True --vllm_importance_sampling_mode sequence_mask --vllm_importance_sampling_cap 3.0 \
+--num_generations 28 --gradient_accumulation_steps 84 \
+--learning_rate 1e-6 --lr_schedule constant \
+--top_p 0.9 \
+--name qwen25vl_olmocrv5_arxiv10k_general10k_postfinetune_yolo_v2_trl_nightly_sequence_mask \
+--preemptible
