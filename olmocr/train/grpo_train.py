@@ -1166,6 +1166,9 @@ def main():
     parser.add_argument("--per_device_train_batch_size", type=int, default=1, help="Training batch size per device")
     parser.add_argument("--per_device_eval_batch_size", type=int, default=1, help="Evaluation batch size per device")
     parser.add_argument("--gradient_accumulation_steps", type=int, default=8, help="Gradient accumulation steps")
+    parser.add_argument("--vllm_importance_sampling_correction", type=bool, default=True, help="See TRL docs")
+    parser.add_argument("--vllm_importance_sampling_mode", type=str, default="sequence_mask", help="See TRL docs")
+    parser.add_argument("--vllm_importance_sampling_cap", type=float, default=3.0, help="See TRL docs")
     parser.add_argument("--warmup_steps", type=int, default=100, help="Number of warmup steps for learning rate scheduler")
     parser.add_argument("--seed", type=int, default=42, help="Seed passed to TRL trainer to shuffle data, etc")
     parser.add_argument("--max_train_samples", type=int, default=None, help="Maximum number of training samples to use (default: use all)")
@@ -1453,6 +1456,9 @@ def main():
         use_vllm=(args.vllm_mode != "none"),
         vllm_mode=args.vllm_mode if args.vllm_mode != "none" else "colocate",
         vllm_gpu_memory_utilization=0.15,
+        vllm_importance_sampling_correction=args.vllm_importance_sampling_correction,
+        vllm_importance_sampling_mode=args.vllm_importance_sampling_mode,
+        vllm_importance_sampling_cap=args.vllm_importance_sampling_cap,
         log_completions=True,
         num_completions_to_print=2,
     )

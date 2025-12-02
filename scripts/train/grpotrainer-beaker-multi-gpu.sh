@@ -196,8 +196,9 @@ for i in range(len(modified_args)):
 setup_commands = [
     # Install dependencies
     "pip install .[train]",
-    "pip install trl wandb",
-    "pip install transformers==4.57.1",  # Updated for GRPO compatibility
+    "pip install wandb",
+    "pip install git+https://github.com/huggingface/trl.git@2a81076b9a3c2952273b80b8628db2afbc7bb858",
+    "pip install transformers==4.57.3",  # Updated for GRPO compatibility
     "pip install flash-attn --no-build-isolation",
     "pip install vllm==0.10.2",
     "pip install s5cmd",
