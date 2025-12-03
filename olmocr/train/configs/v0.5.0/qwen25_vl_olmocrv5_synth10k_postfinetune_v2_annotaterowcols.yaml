@@ -2,11 +2,11 @@
 
 # Project metadata
 project_name: olmocr-qwen-vl-training
-run_name: qwen25_vl_olmocrv5_sample_dataset
+run_name: qwen25_vl_olmocrv5_synth10postfinetune_v2_annotaterowcols
 
 # Model configuration
 model:
-  name: allenai/olmOCR-2-7B-1025-FP8
+  name: /data/models/qwen2.5-vl-7b-olmocrv4_1epoch_promptv4_mix1025_more_rotation-8372
   trust_remote_code: true
   torch_dtype: bfloat16
   use_flash_attention: true
@@ -27,8 +27,8 @@ model:
 dataset:
 
   train:
-    - name: sample_dataset
-      root_dir: /home/ubuntu/olmocr_synth_data/synth_mix_1225/training/big_tables
+    - name: general_30k_synth
+      root_dir: /data/olmOCR-mix-1225-devel/processed_general_30k_synth/
       pipeline: &basic_pipeline
         - name: FrontMatterParser
           front_matter_class: PageResponse
@@ -36,7 +36,7 @@ dataset:
         - name: ReformatLatexBoldItalic
         - name: DatasetTextRuleFilter
         - name: TableTransformation
-          transformation: annotate_dims
+          transformation: annotate_dims        
         - name: PDFRenderer
           target_longest_image_dim: 1288
         - name: RotationAugmentation
@@ -48,16 +48,34 @@ dataset:
         - name: Tokenizer
           masking_index: -100
           end_of_message_token: "<|im_end|>"
+    - name: general_10k_jpeg
+      root_dir: /data/olmOCR-mix-1225-devel/processed_general_10k_jpeg/
+      pipeline: *basic_pipeline         
+    - name: general_10k_dense
+      root_dir: /data/olmOCR-mix-1225-devel/processed_general_10k_dense/
+      pipeline: *basic_pipeline         
+    # Poor man's upsampling      
+    - name: big_tables1
+      root_dir: /data/olmOCR-mix-1225-devel/processed_big_tables/
+      pipeline: *basic_pipeline    
+    - name: big_tables2
+      root_dir: /data/olmOCR-mix-1225-devel/processed_big_tables/
+      pipeline: *basic_pipeline
+    - name: big_tables3
+      root_dir: /data/olmOCR-mix-1225-devel/processed_big_tables/
+      pipeline: *basic_pipeline        
+        
+
 
   eval:
-    - name: sample_dataset_eval
-      root_dir: /home/ubuntu/olmocr/tests/sample_dataset
+    - name: synthmix-training-10k
+      root_dir: /data/olmOCR-mix-1225-devel/processed_synthmix_training_10k/
       pipeline: *basic_pipeline         
 
 
 # Training configuration
 training:
-  output_dir: /tmp/olmocr-trainer
+  output_dir: /weka/oe-training-default/jakep/olmocr-trainer/
   num_train_epochs: 1
   
   # Batch size and accumulation

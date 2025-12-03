@@ -1742,10 +1742,19 @@ if __name__ == "__main__":
             print(f"\n\n=== Analyzing token length distribution across entire dataset ===")
             print(f"Processing {len(dataset)} samples...")
 
-            # Function to process a single sample
-            def process_sample(idx):
+            # Process samples sequentially with progress bar
+            # (ProcessPoolExecutor doesn't work well here because the dataset
+            # and pipeline steps can't be easily pickled for multiprocessing)
+            sequence_lengths = []
+            max_sequence_length = 0
+            max_sequence_sample_idx = 0
+            errors = []
+
+            for idx in tqdm(range(len(dataset)), desc="Analyzing samples"):
                 try:
                     current_sample = dataset[idx]
+                    if current_sample is None:
+                        continue
                     if "labels" in current_sample:
                         # Count total sequence length (all tokens, prompt + completion)
                         labels = current_sample["labels"]
@@ -1753,42 +1762,14 @@ if __name__ == "__main__":
                             total_length = labels.numel()
                         else:
                             total_length = len(labels)
-                        return (idx, total_length, None)
-                    return (idx, None, "No labels in sample")
+                        sequence_lengths.append(total_length)
+                        if total_length > max_sequence_length:
+                            max_sequence_length = total_length
+                            max_sequence_sample_idx = idx
+                    else:
+                        errors.append((idx, "No labels in sample"))
                 except Exception as e:
-                    return (idx, None, str(e))
-
-            # Process samples in parallel with progress bar
-            sequence_lengths = []
-            max_sequence_length = 0
-            max_sequence_sample_idx = 0
-            errors = []
-
-            # Determine number of workers (use fewer workers to avoid memory issues)
-            import multiprocessing
-
-            num_workers = min(multiprocessing.cpu_count() // 2, 8)
-
-            with ProcessPoolExecutor(max_workers=num_workers) as executor:
-                # Submit all tasks
-                futures = {executor.submit(process_sample, idx): idx for idx in range(len(dataset))}
-
-                # Process results with progress bar
-                with tqdm(total=len(dataset), desc="Analyzing samples") as pbar:
-                    for future in as_completed(futures):
-                        idx = futures[future]
-                        try:
-                            idx, sequence_length, error = future.result()
-                            if error:
-                                errors.append((idx, error))
-                            elif sequence_length is not None:
-                                sequence_lengths.append(sequence_length)
-                                if sequence_length > max_sequence_length:
-                                    max_sequence_length = sequence_length
-                                    max_sequence_sample_idx = idx
-                        except Exception as e:
-                            errors.append((idx, f"Future error: {e}"))
-                        pbar.update(1)
+                    errors.append((idx, str(e)))
 
             if errors:
                 print(f"\nEncountered {len(errors)} errors during processing")
