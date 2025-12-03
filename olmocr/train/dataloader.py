@@ -1038,6 +1038,84 @@ class ReformatLatexBoldItalic(PipelineStep):
 
 
 @dataclass(frozen=True, slots=True)
+class TableTransformation(PipelineStep):
+    """Pipeline step that applies transformations to HTML tables in the natural text.
+
+    Supported transformations:
+    - "annotate_dims": Adds data-totalrows and data-totalcols attributes to each table
+      showing the total number of rows and columns.
+    """
+
+    transformation: str = "annotate_dims"  # The transformation to apply
+
+    def _annotate_dims(self, text: str) -> str:
+        """Add data-totalrows and data-totalcols attributes to HTML tables."""
+        from olmocr.bench.table_parsing import parse_html_tables
+
+        # Find all HTML tables
+        table_pattern = re.compile(r"<table\b[^>]*>.*?</table>", re.IGNORECASE | re.DOTALL)
+        tables = table_pattern.findall(text)
+
+        if not tables:
+            return text
+
+        result = text
+        for table_html in tables:
+            # Parse the table to get its structure
+            parsed_tables = parse_html_tables(table_html)
+
+            if not parsed_tables:
+                continue
+
+            table_data = parsed_tables[0]
+
+            # Get the max row and col from cell_text keys
+            if not table_data.cell_text:
+                continue
+
+            max_row = max(row for row, col in table_data.cell_text.keys()) + 1
+            max_col = max(col for row, col in table_data.cell_text.keys()) + 1
+
+            # Find the opening <table> tag and add the attributes
+            table_open_match = re.match(r"<table\b([^>]*)>", table_html, re.IGNORECASE)
+            if table_open_match:
+                existing_attrs = table_open_match.group(1)
+                new_attrs = f' data-totalrows="{max_row}" data-totalcols="{max_col}"'
+
+                # Check if attributes already exist
+                if "data-totalrows" not in existing_attrs.lower():
+                    new_table_open = f"<table{existing_attrs}{new_attrs}>"
+                    new_table_html = table_html.replace(table_open_match.group(0), new_table_open, 1)
+                    result = result.replace(table_html, new_table_html, 1)
+
+        return result
+
+    def __call__(self, sample: Sample) -> Optional[Sample]:
+        """Apply the specified transformation to HTML tables in the sample text."""
+        # Get the natural text from page_data if it exists
+        if "page_data" not in sample:
+            return sample
+
+        page_data = sample["page_data"]
+        if not hasattr(page_data, "natural_text") or not page_data.natural_text:
+            return sample
+
+        text = page_data.natural_text
+
+        # Apply the specified transformation
+        if self.transformation == "annotate_dims":
+            text = self._annotate_dims(text)
+        else:
+            raise ValueError(f"Unknown table transformation: {self.transformation}")
+
+        # Create a new PageResponse with the updated text (since it's frozen)
+        updated_page_data = replace(page_data, natural_text=text)
+        sample["page_data"] = updated_page_data
+
+        return sample
+
+
+@dataclass(frozen=True, slots=True)
 class AugraphyBasicAugmentations(PipelineStep):
     """Pipeline step that applies a decent selection of augraphy augmentations to the data"""
 
