@@ -1044,9 +1044,77 @@ class TableTransformation(PipelineStep):
     Supported transformations:
     - "annotate_dims": Adds data-totalrows and data-totalcols attributes to each table
       showing the total number of rows and columns.
+    - "firstrowpreview": Adds an HTML comment after the opening <table> tag showing
+      a preview of the first row that has the maximum number of columns.
     """
 
     transformation: str = "annotate_dims"  # The transformation to apply
+
+    def _firstrowpreview(self, text: str) -> str:
+        """Add an HTML comment showing a preview of the first data row."""
+        from olmocr.bench.table_parsing import parse_html_tables
+
+        # Find all HTML tables
+        table_pattern = re.compile(r"<table\b[^>]*>.*?</table>", re.IGNORECASE | re.DOTALL)
+        tables = table_pattern.findall(text)
+
+        if not tables:
+            return text
+
+        result = text
+        for table_html in tables:
+            # Parse the table to get its structure
+            parsed_tables = parse_html_tables(table_html)
+
+            if not parsed_tables:
+                continue
+
+            table_data = parsed_tables[0]
+
+            if not table_data.cell_text:
+                continue
+
+            # Get max columns
+            max_col = max(col for _, col in table_data.cell_text.keys()) + 1
+
+            # Group cells by row
+            rows_data: dict[int, dict[int, str]] = {}
+            for (row, col), cell_text in table_data.cell_text.items():
+                if row not in rows_data:
+                    rows_data[row] = {}
+                rows_data[row][col] = cell_text
+
+            # Find first row with max_col columns
+            preview_row_idx = None
+            preview_row_data = None
+            for row_idx in sorted(rows_data.keys()):
+                if len(rows_data[row_idx]) == max_col:
+                    preview_row_idx = row_idx
+                    preview_row_data = rows_data[row_idx]
+                    break
+
+            if preview_row_idx is None or preview_row_data is None:
+                continue
+
+            # Build the comment string
+            col_descriptions = []
+            for col_idx in sorted(preview_row_data.keys()):
+                cell_value = preview_row_data[col_idx].strip()
+                # Truncate long values
+                if len(cell_value) > 50:
+                    cell_value = cell_value[:47] + "..."
+                col_descriptions.append(f"Column {col_idx + 1}: {cell_value}")
+
+            comment = f"<!-- Sample row ({preview_row_idx + 1}): {', '.join(col_descriptions)} -->"
+
+            # Insert the comment after the opening <table> tag
+            table_open_match = re.match(r"<table\b[^>]*>", table_html, re.IGNORECASE)
+            if table_open_match:
+                table_open_tag = table_open_match.group(0)
+                new_table_html = table_html.replace(table_open_tag, table_open_tag + comment, 1)
+                result = result.replace(table_html, new_table_html, 1)
+
+        return result
 
     def _annotate_dims(self, text: str) -> str:
         """Add data-totalrows and data-totalcols attributes to HTML tables."""
@@ -1105,6 +1173,8 @@ class TableTransformation(PipelineStep):
         # Apply the specified transformation
         if self.transformation == "annotate_dims":
             text = self._annotate_dims(text)
+        elif self.transformation == "firstrowpreview":
+            text = self._firstrowpreview(text)
         else:
             raise ValueError(f"Unknown table transformation: {self.transformation}")
 
