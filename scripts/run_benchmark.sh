@@ -19,6 +19,8 @@
 #   ./scripts/run_benchmark.sh --benchbranch olmOCR-bench-1125
 #  With benchpath parameter: use benchmark dataset from a local path or S3 path (mutually exclusive with benchrepo/benchbranch)
 #   ./scripts/run_benchmark.sh --benchpath s3://ai2-oe-data/jakep/olmocr/olmOCR-bench-1125/
+#  With max-tokens parameter: set max tokens for model output per page (default: 8000)
+#   ./scripts/run_benchmark.sh --max-tokens 16000
 
 set -e
 
@@ -31,6 +33,7 @@ BENCH_PATH=""
 BEAKER_IMAGE=""
 REPEATS="1"
 NOPERF=""
+MAX_TOKENS=""
 while [[ $# -gt 0 ]]; do
     case $1 in
         --model)
@@ -65,9 +68,13 @@ while [[ $# -gt 0 ]]; do
             NOPERF="1"
             shift
             ;;
+        --max-tokens)
+            MAX_TOKENS="$2"
+            shift 2
+            ;;
         *)
             echo "Unknown option: $1"
-            echo "Usage: $0 [--model MODEL_NAME] [--cluster CLUSTER_NAME] [--benchbranch BRANCH_NAME] [--benchrepo REPO_URL] [--benchpath PATH] [--beaker-image IMAGE_NAME] [--repeats NUMBER] [--noperf]"
+            echo "Usage: $0 [--model MODEL_NAME] [--cluster CLUSTER_NAME] [--benchbranch BRANCH_NAME] [--benchrepo REPO_URL] [--benchpath PATH] [--beaker-image IMAGE_NAME] [--repeats NUMBER] [--noperf] [--max-tokens NUMBER]"
             exit 1
             ;;
     esac
@@ -156,6 +163,7 @@ bench_repo = "allenai/olmOCR-bench"  # Default repository
 bench_path = None
 repeats = 1
 noperf = False
+max_tokens = None
 
 # Parse remaining arguments
 arg_idx = 5
@@ -178,6 +186,9 @@ while arg_idx < len(sys.argv):
     elif sys.argv[arg_idx] == "--noperf":
         noperf = True
         arg_idx += 1
+    elif sys.argv[arg_idx] == "--max-tokens":
+        max_tokens = int(sys.argv[arg_idx + 1])
+        arg_idx += 2
     else:
         model = sys.argv[arg_idx]
         arg_idx += 1
@@ -246,6 +257,8 @@ for i in range(1, repeats + 1):
     pipeline_cmd = f"python -m olmocr.pipeline {workspace_dir} --markdown --pdfs ./olmOCR-bench/bench_data/pdfs/**/*.pdf"
     if model:
         pipeline_cmd += f" --model {model}"
+    if max_tokens:
+        pipeline_cmd += f" --max_tokens {max_tokens}"
     commands.append(pipeline_cmd)
 
 # Process all workspaces with workspace_to_bench.py
@@ -312,6 +325,8 @@ if not noperf:
     perf_pipeline_cmd = "python -m olmocr.pipeline ./localworkspace1 --markdown --pdfs s3://ai2-oe-data/jakep/olmocr/olmOCR-mix-0225/benchmark_set/*.pdf"
     if model:
         perf_pipeline_cmd += f" --model {model}"
+    if max_tokens:
+        perf_pipeline_cmd += f" --max_tokens {max_tokens}"
 
     perf_commands = []
     if has_aws_creds:
@@ -404,6 +419,11 @@ fi
 if [ -n "$NOPERF" ]; then
     echo "Skipping performance tests"
     CMD="$CMD --noperf"
+fi
+
+if [ -n "$MAX_TOKENS" ]; then
+    echo "Using max tokens: $MAX_TOKENS"
+    CMD="$CMD --max-tokens $MAX_TOKENS"
 fi
 
 eval $CMD

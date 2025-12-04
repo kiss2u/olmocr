@@ -103,8 +103,7 @@ class PageResult:
     is_fallback: bool
 
 
-async def build_page_query(local_pdf_path: str, page: int, target_longest_image_dim: int, image_rotation: int = 0, model_name: str = "olmocr") -> dict:
-    MAX_TOKENS = 8000
+async def build_page_query(local_pdf_path: str, page: int, target_longest_image_dim: int, image_rotation: int = 0, model_name: str = "olmocr", max_tokens: int = 8000) -> dict:
     assert image_rotation in [0, 90, 180, 270], "Invalid image rotation provided in build_page_query"
 
     # Allow the page rendering to process in the background, but limit the number of workers otherwise you can overload the system
@@ -141,7 +140,7 @@ async def build_page_query(local_pdf_path: str, page: int, target_longest_image_
                 ],
             }
         ],
-        "max_tokens": MAX_TOKENS,
+        "max_tokens": max_tokens,
         "temperature": 0.0,
     }
 
@@ -266,6 +265,7 @@ async def process_page(args, worker_id: int, pdf_orig_path: str, pdf_local_path:
             args.target_longest_image_dim,
             image_rotation=cumulative_rotation,
             model_name=args.model,
+            max_tokens=args.max_tokens,
         )
         # Change temperature as number of attempts increases to overcome repetition issues at expense of quality
         query["temperature"] = TEMPERATURE_BY_ATTEMPT[lookup_attempt]
@@ -1113,6 +1113,7 @@ async def main():
     parser.add_argument("--markdown", action="store_true", help="Also write natural text to markdown files preserving the folder structure of the input pdfs")
     parser.add_argument("--target_longest_image_dim", type=int, help="Dimension on longest side to use for rendering the pdf pages", default=1288)
     parser.add_argument("--target_anchor_text_len", type=int, help="Maximum amount of anchor text to use (characters), not used for new models", default=-1)
+    parser.add_argument("--max_tokens", type=int, help="Maximum number of tokens for model output per page", default=8000)
     parser.add_argument("--guided_decoding", action="store_true", help="Enable guided decoding for model YAML type outputs")
 
     server_group = parser.add_argument_group("Server arguments, to specify where your VLLM inference engine is running")
