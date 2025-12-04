@@ -2,7 +2,7 @@
 
 # Project metadata
 project_name: olmocr-qwen-vl-training
-run_name: qwen25_vl_olmocrv5_synth10postfinetune_v2_annotatefirstrow
+run_name: qwen25_vl_olmocrv5_synth10postfinetune_v2_annotatefirstrow12k
 
 # Model configuration
 model:
@@ -85,7 +85,7 @@ training:
 
   gradient_checkpointing: False
 
-  collator_max_token_len: 8192
+  collator_max_token_len: 12000
   
   # Learning rate
   learning_rate: 2e-5
