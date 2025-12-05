@@ -13,6 +13,7 @@ import re
 import shutil
 import ssl
 import sys
+import tarfile
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -98,12 +99,20 @@ def get_markdown_path(workspace: str, source_file: str) -> str:
 
     Args:
         workspace: The workspace directory path
-        source_file: The original source file path (can be S3 or local)
+        source_file: The original source file path (can be S3, local, or tarball::internal_path)
 
     Returns:
         The full path where the markdown file should be written
     """
-    if source_file.startswith("s3://"):
+    # Handle tarball paths (format: tarball_path::internal_path)
+    if "::" in source_file:
+        tarball_path, internal_path = source_file.split("::", 1)
+        # Use tarball basename + internal path structure
+        tarball_basename = os.path.splitext(os.path.basename(tarball_path))[0]
+        if tarball_basename.endswith(".tar"):
+            tarball_basename = tarball_basename[:-4]
+        relative_path = os.path.join(tarball_basename, internal_path)
+    elif source_file.startswith("s3://"):
         # Extract the path after the bucket name for S3 sources
         parsed = urlparse(source_file)
         relative_path = parsed.path.lstrip("/")
@@ -416,10 +425,54 @@ async def process_page(args, worker_id: int, pdf_orig_path: str, pdf_local_path:
     )
 
 
+def extract_pdf_from_tarball(tarball_path: str, internal_path: str, s3_client) -> bytes:
+    """Extract a specific PDF from a tar.gz file.
+
+    Args:
+        tarball_path: Path to the tar.gz file (can be S3 or local)
+        internal_path: Path to the PDF inside the tarball
+        s3_client: S3 client for downloading if needed
+
+    Returns:
+        The PDF bytes
+    """
+    tarball_bytes = get_s3_bytes_with_backoff(s3_client, tarball_path)
+    with tarfile.open(fileobj=BytesIO(tarball_bytes), mode="r:gz") as tar:
+        member = tar.getmember(internal_path)
+        f = tar.extractfile(member)
+        if f is None:
+            raise ValueError(f"Could not extract {internal_path} from {tarball_path}")
+        return f.read()
+
+
+def list_pdfs_in_tarball(tarball_path: str, s3_client) -> list[str]:
+    """List all PDF files inside a tar.gz file.
+
+    Args:
+        tarball_path: Path to the tar.gz file (can be S3 or local)
+        s3_client: S3 client for downloading if needed
+
+    Returns:
+        List of internal paths to PDFs in the tarball
+    """
+    tarball_bytes = get_s3_bytes_with_backoff(s3_client, tarball_path)
+    pdf_paths = []
+    with tarfile.open(fileobj=BytesIO(tarball_bytes), mode="r:gz") as tar:
+        for member in tar.getmembers():
+            if member.isfile() and member.name.lower().endswith(".pdf"):
+                pdf_paths.append(member.name)
+    return pdf_paths
+
+
 async def process_pdf(args, worker_id: int, pdf_orig_path: str):
     with tempfile.NamedTemporaryFile("wb+", suffix=".pdf", delete=False) as tf:
         try:
-            data = await asyncio.to_thread(lambda: get_s3_bytes_with_backoff(pdf_s3, pdf_orig_path))
+            # Check if this is a tarball path (format: tarball_path::internal_path)
+            if "::" in pdf_orig_path:
+                tarball_path, internal_path = pdf_orig_path.split("::", 1)
+                data = await asyncio.to_thread(lambda: extract_pdf_from_tarball(tarball_path, internal_path, pdf_s3))
+            else:
+                data = await asyncio.to_thread(lambda: get_s3_bytes_with_backoff(pdf_s3, pdf_orig_path))
             tf.write(data)
             tf.flush()
         except ClientError as ex:
@@ -1223,10 +1276,27 @@ async def main():
     if args.pdfs:
         logger.info("Got --pdfs argument, going to add to the work queue")
         pdf_work_paths = set()
+        tarball_work_paths = []  # List of lists, each inner list is PDFs from one tarball
 
         for pdf_path in args.pdfs:
+            # Check if this is a tar.gz file (S3 or local)
+            is_tarball = pdf_path.lower().endswith(".tar.gz") or pdf_path.lower().endswith(".tgz")
+
+            if is_tarball:
+                logger.info(f"Processing tarball at {pdf_path}")
+                try:
+                    internal_pdfs = list_pdfs_in_tarball(pdf_path, pdf_s3)
+                    if internal_pdfs:
+                        # Create tarball::internal_path format for each PDF
+                        tarball_pdf_paths = [f"{pdf_path}::{internal}" for internal in internal_pdfs]
+                        tarball_work_paths.append(tarball_pdf_paths)
+                        logger.info(f"Found {len(internal_pdfs)} PDFs in tarball {pdf_path}")
+                    else:
+                        logger.warning(f"No PDFs found in tarball {pdf_path}")
+                except Exception as e:
+                    logger.warning(f"Failed to read tarball {pdf_path}: {e}")
             # Expand s3 paths
-            if pdf_path.startswith("s3://"):
+            elif pdf_path.startswith("s3://"):
                 logger.info(f"Expanding s3 glob at {pdf_path}")
                 pdf_work_paths |= set(expand_s3_glob(pdf_s3, pdf_path))
             elif os.path.exists(pdf_path):
@@ -1253,38 +1323,45 @@ async def main():
             else:
                 raise ValueError("pdfs argument needs to be either a local path, an s3 path, or an s3 glob pattern...")
 
-        logger.info(f"Found {len(pdf_work_paths):,} total pdf paths to add")
+        logger.info(f"Found {len(pdf_work_paths):,} regular pdf paths and {len(tarball_work_paths):,} tarballs to add")
 
-        # Estimate average pages per pdf
-        sample_size = min(100, len(pdf_work_paths))
-        sampled_pdfs = random.sample(list(pdf_work_paths), sample_size)
-        page_counts = []
+        # Process regular PDFs with calculated items_per_group
+        if pdf_work_paths:
+            # Estimate average pages per pdf
+            sample_size = min(100, len(pdf_work_paths))
+            sampled_pdfs = random.sample(list(pdf_work_paths), sample_size)
+            page_counts = []
 
-        for pdf in tqdm(sampled_pdfs, desc="Sampling PDFs to calculate optimal length"):
-            try:
-                # Download the PDF to a temp file
-                with tempfile.NamedTemporaryFile(suffix=".pdf") as tmp_file:
-                    tmp_file.write(get_s3_bytes(pdf_s3, pdf))
-                    tmp_file.flush()
-                    if is_png(tmp_file.name) or is_jpeg(tmp_file.name):
-                        page_counts.append(1)
-                    else:
-                        reader = PdfReader(tmp_file.name)
-                        page_counts.append(len(reader.pages))
-            except Exception as e:
-                logger.warning(f"Failed to read {pdf}: {e}")
+            for pdf in tqdm(sampled_pdfs, desc="Sampling PDFs to calculate optimal length"):
+                try:
+                    # Download the PDF to a temp file
+                    with tempfile.NamedTemporaryFile(suffix=".pdf") as tmp_file:
+                        tmp_file.write(get_s3_bytes(pdf_s3, pdf))
+                        tmp_file.flush()
+                        if is_png(tmp_file.name) or is_jpeg(tmp_file.name):
+                            page_counts.append(1)
+                        else:
+                            reader = PdfReader(tmp_file.name)
+                            page_counts.append(len(reader.pages))
+                except Exception as e:
+                    logger.warning(f"Failed to read {pdf}: {e}")
 
-        if page_counts:
-            avg_pages_per_pdf = sum(page_counts) / len(page_counts)
-        else:
-            logger.warning("Could not read any PDFs to estimate average page count.")
-            avg_pages_per_pdf = 10  # Default to 10 pages per PDF if sampling fails
+            if page_counts:
+                avg_pages_per_pdf = sum(page_counts) / len(page_counts)
+            else:
+                logger.warning("Could not read any PDFs to estimate average page count.")
+                avg_pages_per_pdf = 10  # Default to 10 pages per PDF if sampling fails
 
-        items_per_group = max(1, int(args.pages_per_group / avg_pages_per_pdf))
-        logger.info(f"Calculated items_per_group: {items_per_group} based on average pages per PDF: {avg_pages_per_pdf:.2f}")
+            items_per_group = max(1, int(args.pages_per_group / avg_pages_per_pdf))
+            logger.info(f"Calculated items_per_group: {items_per_group} based on average pages per PDF: {avg_pages_per_pdf:.2f}")
 
-        # Now call populate_queue
-        await work_queue.populate_queue(pdf_work_paths, items_per_group)
+            # Now call populate_queue for regular PDFs
+            await work_queue.populate_queue(list(pdf_work_paths), items_per_group)
+
+        # Process tarball PDFs - each tarball becomes one work item (items_per_group effectively equals all PDFs in that tarball)
+        for tarball_pdfs in tarball_work_paths:
+            # Each tarball's PDFs are added as a single work item
+            await work_queue.populate_queue(tarball_pdfs, len(tarball_pdfs))
 
     if args.stats:
         print_stats(args, work_queue)
