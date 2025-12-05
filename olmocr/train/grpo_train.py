@@ -44,6 +44,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Global variable for bench type filtering
+_bench_type_filter: Optional[List[str]] = None
+
 
 def _make_type_stats():
     """Factory function for creating type stats dicts (picklable, unlike lambdas)."""
@@ -630,6 +633,13 @@ def evaluate_single_completion(args: Tuple[int, Any, str, str, List[str]]) -> Tu
             logger.warning(f"No relevant tests found for test IDs: {comp_test_ids}")
             return i, None, None
 
+        # Filter tests by type if bench_type_filter is set
+        if _bench_type_filter:
+            relevant_tests = [t for t in relevant_tests if getattr(t, 'type', 'unknown') in _bench_type_filter]
+            if not relevant_tests:
+                logger.warning(f"No tests remaining after type filter {_bench_type_filter} for completion {i}")
+                return i, None, None
+
         logger.info(f"Found {len(relevant_tests)} relevant tests for completion {i}")
 
         # Track stats by test type using defaultdict
@@ -1153,6 +1163,13 @@ def main():
         help="Regex pattern to filter JSONL files by basename (e.g., 'arxiv|physics' matches arxiv.jsonl, physics.jsonl, arxiv_math.jsonl, etc.)",
     )
     parser.add_argument(
+        "--bench_type_filter",
+        type=str,
+        action="append",
+        default=None,
+        help="Filter tests to only include specific test types (e.g., 'table', 'math'). Can be specified multiple times to allow multiple types.",
+    )
+    parser.add_argument(
         "--eval_bench_data_folder",
         type=str,
         required=False,
@@ -1265,6 +1282,12 @@ def main():
     )
 
     args = parser.parse_args()
+
+    # Set up bench type filter global variable
+    global _bench_type_filter
+    _bench_type_filter = args.bench_type_filter
+    if _bench_type_filter:
+        logger.info(f"Bench type filter enabled: only including test types {_bench_type_filter}")
 
     # Set up output directory
     os.makedirs(args.output_dir, exist_ok=True)
