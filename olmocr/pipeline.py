@@ -1300,22 +1300,19 @@ async def main():
     if args.pdfs:
         logger.info("Got --pdfs argument, going to add to the work queue")
         pdf_work_paths = set()
-        tarball_paths = []  # Individual tarball paths to process
+        tarball_paths = set()
 
         for pdf_path in args.pdfs:
             # Expand s3 glob paths first, then categorize results
             if pdf_path.startswith("s3://"):
                 logger.info(f"Expanding s3 glob at {pdf_path}")
                 expanded_paths = set(expand_s3_glob(pdf_s3, pdf_path))
-                for expanded_path in expanded_paths:
-                    if expanded_path.lower().endswith(".tar.gz") or expanded_path.lower().endswith(".tgz"):
-                        tarball_paths.append(expanded_path)
-                    else:
-                        pdf_work_paths.add(expanded_path)
+                tarball_paths.update(p for p in expanded_paths if is_tarball_path(p))
+                pdf_work_paths.update(p for p in expanded_paths if not is_tarball_path(p))
             elif os.path.exists(pdf_path):
                 # Check if this is a tar.gz file (local)
-                if pdf_path.lower().endswith(".tar.gz") or pdf_path.lower().endswith(".tgz"):
-                    tarball_paths.append(pdf_path)
+                if is_tarball_path(pdf_path):
+                    tarball_paths.add(pdf_path)
                 elif (
                     pdf_path.lower().endswith(".pdf")
                     or pdf_path.lower().endswith(".png")
@@ -1333,7 +1330,9 @@ async def main():
                 elif pdf_path.lower().endswith(".txt"):
                     logger.info(f"Loading file at {pdf_path} as list of paths")
                     with open(pdf_path, "r") as f:
-                        pdf_work_paths |= set(filter(None, (line.strip() for line in f)))
+                        lines = [line.strip() for line in f if line.strip()]
+                    tarball_paths.update(p for p in lines if is_tarball_path(p))
+                    pdf_work_paths.update(p for p in lines if not is_tarball_path(p))
                 else:
                     raise ValueError(f"Unsupported file extension for {pdf_path}")
             else:
