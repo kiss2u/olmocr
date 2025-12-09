@@ -432,52 +432,36 @@ def is_tarball_path(path: str) -> bool:
 
 
 async def process_tarball(args, worker_id: int, tarball_path: str) -> list:
-    """Process all PDFs inside a tarball and return list of Dolma documents.
-
-    Args:
-        args: Pipeline arguments
-        worker_id: Worker ID for logging
-        tarball_path: Path to the tar.gz file (can be S3 or local)
-
-    Returns:
-        List of Dolma documents (one per PDF in the tarball)
-    """
+    """Process all PDFs inside a tarball concurrently and return list of Dolma documents."""
     logger.info(f"Worker {worker_id} processing tarball {tarball_path}")
 
-    # Download the tarball
     tarball_bytes = await asyncio.to_thread(lambda: get_s3_bytes_with_backoff(pdf_s3, tarball_path))
 
-    # Extract and process each PDF
-    dolma_docs = []
-    with tarfile.open(fileobj=BytesIO(tarball_bytes), mode="r:gz") as tar:
-        for member in tar.getmembers():
-            if not member.isfile() or not member.name.lower().endswith(".pdf"):
-                continue
+    # Extract all PDFs to a temp directory
+    temp_dir = tempfile.mkdtemp()
+    try:
+        pdf_files = []  # (source_path, local_path)
+        with tarfile.open(fileobj=BytesIO(tarball_bytes), mode="r:gz") as tar:
+            for member in tar.getmembers():
+                if member.isfile() and member.name.lower().endswith(".pdf"):
+                    local_path = os.path.join(temp_dir, os.path.basename(member.name))
+                    with open(local_path, "wb") as f:
+                        extracted = tar.extractfile(member)
+                        if extracted:
+                            f.write(extracted.read())
+                            pdf_files.append((f"{tarball_path}::{member.name}", local_path))
 
-            # Extract PDF to temp file
-            pdf_file = tar.extractfile(member)
-            if pdf_file is None:
-                logger.warning(f"Could not extract {member.name} from {tarball_path}")
-                continue
+        logger.info(f"Worker {worker_id} extracted {len(pdf_files)} PDFs from {tarball_path}")
 
-            # Create the source path in tarball::internal_path format
-            source_path = f"{tarball_path}::{member.name}"
+        # Process all PDFs concurrently
+        async with asyncio.TaskGroup() as tg:
+            tasks = [tg.create_task(process_single_pdf(args, worker_id, src, local)) for src, local in pdf_files]
 
-            with tempfile.NamedTemporaryFile("wb+", suffix=".pdf", delete=False) as tf:
-                try:
-                    tf.write(pdf_file.read())
-                    tf.flush()
-
-                    # Process this PDF
-                    doc = await process_single_pdf(args, worker_id, source_path, tf.name)
-                    if doc is not None:
-                        dolma_docs.append(doc)
-                finally:
-                    if os.path.exists(tf.name):
-                        os.unlink(tf.name)
-
-    logger.info(f"Worker {worker_id} processed {len(dolma_docs)} PDFs from tarball {tarball_path}")
-    return dolma_docs
+        dolma_docs = [t.result() for t in tasks if t.result() is not None]
+        logger.info(f"Worker {worker_id} processed {len(dolma_docs)} PDFs from tarball {tarball_path}")
+        return dolma_docs
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 async def process_single_pdf(args, worker_id: int, pdf_orig_path: str, local_pdf_path: str):
@@ -1392,7 +1376,7 @@ async def main():
 
         # Add tarballs to the queue - each tarball is one work item
         if tarball_paths:
-                await work_queue.populate_queue(tarball_paths, 1)
+            await work_queue.populate_queue(tarball_paths, 1)
 
     if args.stats:
         print_stats(args, work_queue)
