@@ -1392,9 +1392,7 @@ async def main():
 
         # Add tarballs to the queue - each tarball is one work item
         if tarball_paths:
-            for tarball_path in tarball_paths:
-                # Each tarball is added as a single work item (items_per_group=1)
-                await work_queue.populate_queue([tarball_path], 1)
+                await work_queue.populate_queue(tarball_paths, 1)
 
     if args.stats:
         print_stats(args, work_queue)
