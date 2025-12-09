@@ -250,8 +250,7 @@ class DetailedRewardLoggingCallback(TrainerCallback):
 
     def on_log(self, args, state, control, logs=None, **kwargs):
         """Called when trainer logs metrics."""
-        # Log detailed reward statistics periodically
-        if hasattr(detailed_reward_logger, 'accumulated_stats') and detailed_reward_logger.accumulated_stats["total_completions"] > 0:
+        if hasattr(detailed_reward_logger, 'accumulated_stats'):
             detailed_reward_logger.log_to_wandb(state.global_step)
             detailed_reward_logger.clear()
 
