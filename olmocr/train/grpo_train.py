@@ -31,6 +31,7 @@ from transformers import (
 )
 from trl import GRPOConfig, GRPOTrainer
 
+from olmocr.bench.table_parsing import parse_html_tables, parse_markdown_tables
 from olmocr.bench.tests import load_single_test
 from olmocr.data.renderpdf import render_pdf_to_base64png
 from olmocr.prompts import PageResponse, build_no_anchoring_v4_yaml_prompt
@@ -999,6 +1000,69 @@ def reward_element_count(prompts, completions: list[str] | list[list[dict]], cla
     return rewards
 
 
+def reward_rect_tables(prompts, completions: list[str] | list[list[dict]], **kwargs):
+    """
+    Reward function based on the proportion of rectangular HTML tables in the completion.
+
+    Parses all HTML tables from the completion and rewards based on how many are rectangular.
+    Markdown tables are treated as scoring 0 (we reward generating HTML tables).
+
+    Scoring:
+    - 0 tables: reward 1.0 (no tables to check)
+    - 1 table: 1.0 if is_rectangular, 0.0 otherwise
+    - N tables: each rectangular table contributes 1/N to the reward
+
+    Args:
+        prompts: List of prompts
+        completions: List of generated completions (model outputs)
+        **kwargs: Additional arguments
+
+    Returns:
+        List of reward scores between 0.0 and 1.0
+    """
+    logger.info(f"Running rectangular tables reward function for {len(completions)} completions")
+
+    rewards = []
+
+    for i, completion in enumerate(completions):
+        # Extract text from completion
+        if isinstance(completion, list):
+            comp_text = completion[0]["content"] if completion else ""
+        elif isinstance(completion, str):
+            comp_text = completion
+        else:
+            comp_text = ""
+
+        # Parse HTML tables from completion
+        html_tables = parse_html_tables(comp_text)
+
+        # If no HTML tables, reward is 1.0 (nothing to penalize)
+        if len(html_tables) == 0:
+            rewards.append(1.0)
+            logger.debug(f"Completion {i}: No HTML tables found, reward=1.0")
+            continue
+
+        # Count rectangular tables
+        rect_count = sum(1 for table in html_tables if table.is_rectangular)
+        total_tables = len(html_tables)
+
+        # Each rectangular table contributes 1/N to the reward
+        reward = rect_count / total_tables
+
+        logger.debug(
+            f"Completion {i}: {rect_count}/{total_tables} rectangular HTML tables, reward={reward:.3f}"
+        )
+
+        rewards.append(reward)
+
+    logger.info(
+        f"Rectangular tables rewards - avg: {sum(rewards)/len(rewards) if rewards else 0:.3f}, "
+        f"range: [{min(rewards) if rewards else 0:.3f}, {max(rewards) if rewards else 0:.3f}]"
+    )
+
+    return rewards
+
+
 def reward_eos(eos_token_id: int, prompts, completions: list[str] | list[list[dict]], completion_ids: list[list[int]], **kwargs):
     """
     Reward function that checks if the EOS token is the last token in completion_ids.
@@ -1252,6 +1316,14 @@ def main():
         help="Use element count matching reward (tables and math equations) with optional weight (default: 1.0)",
     )
     parser.add_argument(
+        "--reward_rect_tables",
+        nargs="?",
+        const=1.0,
+        type=float,
+        default=None,
+        help="Use rectangular HTML tables reward - scores based on proportion of HTML tables that are rectangular (default: 1.0)",
+    )
+    parser.add_argument(
         "--reward_eos",
         nargs="?",
         const=1.0,
@@ -1412,6 +1484,12 @@ def main():
         reward_names.append("element_count")
         logger.info(f"Added element count matching reward function with weight {args.reward_element_count}")
 
+    if args.reward_rect_tables is not None:
+        reward_funcs.append(reward_rect_tables)
+        reward_weights.append(args.reward_rect_tables)
+        reward_names.append("rect_tables")
+        logger.info(f"Added rectangular HTML tables reward function with weight {args.reward_rect_tables}")
+
     if args.reward_eos is not None:
         # Get EOS token ID from processor's tokenizer
         eos_token_id = processor.tokenizer.eos_token_id
@@ -1429,7 +1507,7 @@ def main():
 
     if not reward_funcs:
         logger.error(
-            "No reward function specified. Use at least one of: --reward_bench, --reward_bench_macroavg, --reward_medoid, --reward_bench_edit_distance, --reward_front_matter, --reward_element_count, --reward_eos"
+            "No reward function specified. Use at least one of: --reward_bench, --reward_bench_macroavg, --reward_medoid, --reward_bench_edit_distance, --reward_front_matter, --reward_element_count, --reward_rect_tables, --reward_eos"
         )
         return
 
