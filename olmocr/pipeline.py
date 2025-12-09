@@ -425,72 +425,76 @@ async def process_page(args, worker_id: int, pdf_orig_path: str, pdf_local_path:
     )
 
 
-def extract_pdf_from_tarball(tarball_path: str, internal_path: str, s3_client) -> bytes:
-    """Extract a specific PDF from a tar.gz file.
+def is_tarball_path(path: str) -> bool:
+    """Check if a path is a tarball based on extension."""
+    lower = path.lower()
+    return lower.endswith(".tar.gz") or lower.endswith(".tgz")
+
+
+async def process_tarball(args, worker_id: int, tarball_path: str) -> list:
+    """Process all PDFs inside a tarball and return list of Dolma documents.
 
     Args:
+        args: Pipeline arguments
+        worker_id: Worker ID for logging
         tarball_path: Path to the tar.gz file (can be S3 or local)
-        internal_path: Path to the PDF inside the tarball
-        s3_client: S3 client for downloading if needed
 
     Returns:
-        The PDF bytes
+        List of Dolma documents (one per PDF in the tarball)
     """
-    tarball_bytes = get_s3_bytes_with_backoff(s3_client, tarball_path)
-    with tarfile.open(fileobj=BytesIO(tarball_bytes), mode="r:gz") as tar:
-        member = tar.getmember(internal_path)
-        f = tar.extractfile(member)
-        if f is None:
-            raise ValueError(f"Could not extract {internal_path} from {tarball_path}")
-        return f.read()
+    logger.info(f"Worker {worker_id} processing tarball {tarball_path}")
 
+    # Download the tarball
+    tarball_bytes = await asyncio.to_thread(lambda: get_s3_bytes_with_backoff(pdf_s3, tarball_path))
 
-def list_pdfs_in_tarball(tarball_path: str, s3_client) -> list[str]:
-    """List all PDF files inside a tar.gz file.
-
-    Args:
-        tarball_path: Path to the tar.gz file (can be S3 or local)
-        s3_client: S3 client for downloading if needed
-
-    Returns:
-        List of internal paths to PDFs in the tarball
-    """
-    tarball_bytes = get_s3_bytes_with_backoff(s3_client, tarball_path)
-    pdf_paths = []
+    # Extract and process each PDF
+    dolma_docs = []
     with tarfile.open(fileobj=BytesIO(tarball_bytes), mode="r:gz") as tar:
         for member in tar.getmembers():
-            if member.isfile() and member.name.lower().endswith(".pdf"):
-                pdf_paths.append(member.name)
-    return pdf_paths
+            if not member.isfile() or not member.name.lower().endswith(".pdf"):
+                continue
+
+            # Extract PDF to temp file
+            pdf_file = tar.extractfile(member)
+            if pdf_file is None:
+                logger.warning(f"Could not extract {member.name} from {tarball_path}")
+                continue
+
+            # Create the source path in tarball::internal_path format
+            source_path = f"{tarball_path}::{member.name}"
+
+            with tempfile.NamedTemporaryFile("wb+", suffix=".pdf", delete=False) as tf:
+                try:
+                    tf.write(pdf_file.read())
+                    tf.flush()
+
+                    # Process this PDF
+                    doc = await process_single_pdf(args, worker_id, source_path, tf.name)
+                    if doc is not None:
+                        dolma_docs.append(doc)
+                finally:
+                    if os.path.exists(tf.name):
+                        os.unlink(tf.name)
+
+    logger.info(f"Worker {worker_id} processed {len(dolma_docs)} PDFs from tarball {tarball_path}")
+    return dolma_docs
 
 
-async def process_pdf(args, worker_id: int, pdf_orig_path: str):
-    with tempfile.NamedTemporaryFile("wb+", suffix=".pdf", delete=False) as tf:
-        try:
-            # Check if this is a tarball path (format: tarball_path::internal_path)
-            if "::" in pdf_orig_path:
-                tarball_path, internal_path = pdf_orig_path.split("::", 1)
-                data = await asyncio.to_thread(lambda: extract_pdf_from_tarball(tarball_path, internal_path, pdf_s3))
-            else:
-                data = await asyncio.to_thread(lambda: get_s3_bytes_with_backoff(pdf_s3, pdf_orig_path))
-            tf.write(data)
-            tf.flush()
-        except ClientError as ex:
-            if ex.response["Error"]["Code"] == "NoSuchKey":
-                logger.info(f"S3 File Not found, skipping it completely {pdf_orig_path}")
-                return None
-            else:
-                raise
+async def process_single_pdf(args, worker_id: int, pdf_orig_path: str, local_pdf_path: str):
+    """Process a single PDF that's already on disk.
 
-        if is_png(tf.name) or is_jpeg(tf.name):
-            logger.info(f"Converting {pdf_orig_path} from image to PDF format...")
-            tf.seek(0)
-            tf.write(convert_image_to_pdf_bytes(tf.name))
-            tf.flush()
+    Args:
+        args: Pipeline arguments
+        worker_id: Worker ID for logging
+        pdf_orig_path: Original path (for metadata, can be tarball::internal format)
+        local_pdf_path: Local path to the PDF file
 
+    Returns:
+        Dolma document or None
+    """
     try:
         try:
-            reader = PdfReader(tf.name)
+            reader = PdfReader(local_pdf_path)
             num_pages = reader.get_num_pages()
         except:
             logger.exception(f"Could not count number of pages for {pdf_orig_path}, aborting document")
@@ -498,7 +502,7 @@ async def process_pdf(args, worker_id: int, pdf_orig_path: str):
 
         logger.debug(f"Got {num_pages} pages to do for {pdf_orig_path} in worker {worker_id}")
 
-        if args.apply_filter and get_pdf_filter().filter_out_pdf(tf.name):
+        if args.apply_filter and get_pdf_filter().filter_out_pdf(local_pdf_path):
             logger.info(f"Filtering out pdf {pdf_orig_path}")
             return None
 
@@ -509,7 +513,7 @@ async def process_pdf(args, worker_id: int, pdf_orig_path: str):
         try:
             async with asyncio.TaskGroup() as tg:
                 for page_num in range(1, num_pages + 1):
-                    task = tg.create_task(process_page(args, worker_id, pdf_orig_path, tf.name, page_num))
+                    task = tg.create_task(process_page(args, worker_id, pdf_orig_path, local_pdf_path, page_num))
                     page_tasks.append(task)
 
             # Collect the results from the entire task group, assuming no exceptions
@@ -536,10 +540,35 @@ async def process_pdf(args, worker_id: int, pdf_orig_path: str):
                     logger.critical("Encountered BrokenProcessPool, exiting process.")
                     sys.exit(1)
 
-            logger.exception(f"Exception in process_pdf for {pdf_orig_path}: {e}")
-            # You can't build a dolma doc with even 1 failed page, so just get out of here
-            # However, you don't want to propagate an exception higher up and cancel the entire work_group
+            logger.exception(f"Exception in process_single_pdf for {pdf_orig_path}: {e}")
             return None
+    except Exception as e:
+        logger.exception(f"Exception in process_single_pdf for {pdf_orig_path}: {e}")
+        return None
+
+
+async def process_pdf(args, worker_id: int, pdf_orig_path: str):
+    """Process a single PDF from S3/local path and return a Dolma document."""
+    with tempfile.NamedTemporaryFile("wb+", suffix=".pdf", delete=False) as tf:
+        try:
+            data = await asyncio.to_thread(lambda: get_s3_bytes_with_backoff(pdf_s3, pdf_orig_path))
+            tf.write(data)
+            tf.flush()
+        except ClientError as ex:
+            if ex.response["Error"]["Code"] == "NoSuchKey":
+                logger.info(f"S3 File Not found, skipping it completely {pdf_orig_path}")
+                return None
+            else:
+                raise
+
+        if is_png(tf.name) or is_jpeg(tf.name):
+            logger.info(f"Converting {pdf_orig_path} from image to PDF format...")
+            tf.seek(0)
+            tf.write(convert_image_to_pdf_bytes(tf.name))
+            tf.flush()
+
+    try:
+        return await process_single_pdf(args, worker_id, pdf_orig_path, tf.name)
     finally:
         if os.path.exists(tf.name):
             os.unlink(tf.name)
@@ -614,7 +643,13 @@ async def worker(args, work_queue: WorkQueue, semaphore, worker_id):
 
         try:
             async with asyncio.TaskGroup() as tg:
-                dolma_tasks = [tg.create_task(process_pdf(args, worker_id, pdf)) for pdf in work_item.work_paths]
+                dolma_tasks = []
+                for path in work_item.work_paths:
+                    if is_tarball_path(path):
+                        # Tarball returns a list of docs, so we handle it specially
+                        dolma_tasks.append(tg.create_task(process_tarball(args, worker_id, path)))
+                    else:
+                        dolma_tasks.append(tg.create_task(process_pdf(args, worker_id, path)))
                 logger.info(f"Created all tasks for {work_item.hash}")
 
             logger.info(f"Finished TaskGroup for worker on {work_item.hash}")
@@ -625,9 +660,14 @@ async def worker(args, work_queue: WorkQueue, semaphore, worker_id):
                     result = task.result()
                 except:
                     # some dolma doc creations may have failed
-                    pass
+                    result = None
 
-                if result is not None:
+                if result is None:
+                    continue
+                # process_tarball returns a list, process_pdf returns a single doc
+                if isinstance(result, list):
+                    dolma_docs.extend(result)
+                else:
                     dolma_docs.append(result)
 
             logger.info(f"Got {len(dolma_docs)} docs for {work_item.hash}")
@@ -1315,23 +1355,7 @@ async def main():
             else:
                 raise ValueError("pdfs argument needs to be either a local path, an s3 path, or an s3 glob pattern...")
 
-        # Now process tarballs to extract their PDF lists
-        tarball_work_paths = []  # List of lists, each inner list is PDFs from one tarball
-        for tarball_path in tarball_paths:
-            logger.info(f"Processing tarball at {tarball_path}")
-            try:
-                internal_pdfs = list_pdfs_in_tarball(tarball_path, pdf_s3)
-                if internal_pdfs:
-                    # Create tarball::internal_path format for each PDF
-                    tarball_pdf_paths = [f"{tarball_path}::{internal}" for internal in internal_pdfs]
-                    tarball_work_paths.append(tarball_pdf_paths)
-                    logger.info(f"Found {len(internal_pdfs)} PDFs in tarball {tarball_path}")
-                else:
-                    logger.warning(f"No PDFs found in tarball {tarball_path}")
-            except Exception as e:
-                logger.warning(f"Failed to read tarball {tarball_path}: {e}")
-
-        logger.info(f"Found {len(pdf_work_paths):,} regular pdf paths and {len(tarball_work_paths):,} tarballs to add")
+        logger.info(f"Found {len(pdf_work_paths):,} regular pdf paths and {len(tarball_paths):,} tarballs to add")
 
         # Process regular PDFs with calculated items_per_group
         if pdf_work_paths:
@@ -1366,10 +1390,11 @@ async def main():
             # Now call populate_queue for regular PDFs
             await work_queue.populate_queue(list(pdf_work_paths), items_per_group)
 
-        # Process tarball PDFs - each tarball becomes one work item (items_per_group effectively equals all PDFs in that tarball)
-        for tarball_pdfs in tarball_work_paths:
-            # Each tarball's PDFs are added as a single work item
-            await work_queue.populate_queue(tarball_pdfs, len(tarball_pdfs))
+        # Add tarballs to the queue - each tarball is one work item
+        if tarball_paths:
+            for tarball_path in tarball_paths:
+                # Each tarball is added as a single work item (items_per_group=1)
+                await work_queue.populate_queue([tarball_path], 1)
 
     if args.stats:
         print_stats(args, work_queue)
