@@ -4,7 +4,6 @@ import glob
 import hashlib
 import logging
 import os
-import posixpath
 import time
 from io import BytesIO, TextIOWrapper
 from pathlib import Path
