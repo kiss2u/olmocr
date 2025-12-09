@@ -44,6 +44,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Global variable for bench type filtering
+_bench_type_filter: Optional[List[str]] = None
+
 
 def _make_type_stats():
     """Factory function for creating type stats dicts (picklable, unlike lambdas)."""
@@ -630,6 +633,13 @@ def evaluate_single_completion(args: Tuple[int, Any, str, str, List[str]]) -> Tu
             logger.warning(f"No relevant tests found for test IDs: {comp_test_ids}")
             return i, None, None
 
+        # Filter tests by type if bench_type_filter is set
+        if _bench_type_filter:
+            relevant_tests = [t for t in relevant_tests if getattr(t, 'type', 'unknown') in _bench_type_filter]
+            if not relevant_tests:
+                logger.warning(f"No tests remaining after type filter {_bench_type_filter} for completion {i}")
+                return i, None, None
+
         logger.info(f"Found {len(relevant_tests)} relevant tests for completion {i}")
 
         # Track stats by test type using defaultdict
@@ -1153,6 +1163,13 @@ def main():
         help="Regex pattern to filter JSONL files by basename (e.g., 'arxiv|physics' matches arxiv.jsonl, physics.jsonl, arxiv_math.jsonl, etc.)",
     )
     parser.add_argument(
+        "--bench_type_filter",
+        type=str,
+        action="append",
+        default=None,
+        help="Filter tests to only include specific test types (e.g., 'table', 'math'). Can be specified multiple times to allow multiple types.",
+    )
+    parser.add_argument(
         "--eval_bench_data_folder",
         type=str,
         required=False,
@@ -1166,6 +1183,9 @@ def main():
     parser.add_argument("--per_device_train_batch_size", type=int, default=1, help="Training batch size per device")
     parser.add_argument("--per_device_eval_batch_size", type=int, default=1, help="Evaluation batch size per device")
     parser.add_argument("--gradient_accumulation_steps", type=int, default=8, help="Gradient accumulation steps")
+    parser.add_argument("--vllm_importance_sampling_correction", type=bool, default=True, help="See TRL docs")
+    parser.add_argument("--vllm_importance_sampling_mode", type=str, default="sequence_mask", help="See TRL docs")
+    parser.add_argument("--vllm_importance_sampling_cap", type=float, default=3.0, help="See TRL docs")
     parser.add_argument("--warmup_steps", type=int, default=100, help="Number of warmup steps for learning rate scheduler")
     parser.add_argument("--seed", type=int, default=42, help="Seed passed to TRL trainer to shuffle data, etc")
     parser.add_argument("--max_train_samples", type=int, default=None, help="Maximum number of training samples to use (default: use all)")
@@ -1262,6 +1282,12 @@ def main():
     )
 
     args = parser.parse_args()
+
+    # Set up bench type filter global variable
+    global _bench_type_filter
+    _bench_type_filter = args.bench_type_filter
+    if _bench_type_filter:
+        logger.info(f"Bench type filter enabled: only including test types {_bench_type_filter}")
 
     # Set up output directory
     os.makedirs(args.output_dir, exist_ok=True)
@@ -1453,6 +1479,9 @@ def main():
         use_vllm=(args.vllm_mode != "none"),
         vllm_mode=args.vllm_mode if args.vllm_mode != "none" else "colocate",
         vllm_gpu_memory_utilization=0.15,
+        vllm_importance_sampling_correction=args.vllm_importance_sampling_correction,
+        vllm_importance_sampling_mode=args.vllm_importance_sampling_mode,
+        vllm_importance_sampling_cap=args.vllm_importance_sampling_cap,
         log_completions=True,
         num_completions_to_print=2,
     )
