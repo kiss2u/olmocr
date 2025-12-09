@@ -46,19 +46,20 @@ def expand_s3_glob(s3_client, s3_glob: str) -> dict[str, str]:
 
     bucket = parsed.netloc
     raw_path = parsed.path.lstrip("/")
-    prefix = posixpath.dirname(raw_path)
-    pattern = posixpath.basename(raw_path)
 
-    # Case 1: We have a wildcard
-    if any(wc in pattern for wc in ["*", "?", "[", "]"]):
-        if prefix and not prefix.endswith("/"):
-            prefix += "/"
+    # Case 1: We have a wildcard - find the longest fixed prefix before any wildcard
+    # Note: '?' is not supported as it conflicts with URL query parameters
+    if any(wc in raw_path for wc in ["*", "[", "]"]):
+        # Find the first wildcard character and use everything before it as the S3 prefix
+        first_wildcard = min((raw_path.index(wc) for wc in ["*", "[", "]"] if wc in raw_path))
+        prefix = raw_path[:first_wildcard]
+
         paginator = s3_client.get_paginator("list_objects_v2")
         matched = {}
         for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
             for obj in page.get("Contents", []):
                 key = obj["Key"]
-                if glob.fnmatch.fnmatch(key, posixpath.join(prefix, pattern)):  # type: ignore
+                if glob.fnmatch.fnmatch(key, raw_path):
                     matched[f"s3://{bucket}/{key}"] = obj["ETag"].strip('"')
         return matched
 
