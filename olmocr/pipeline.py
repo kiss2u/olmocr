@@ -1276,31 +1276,23 @@ async def main():
     if args.pdfs:
         logger.info("Got --pdfs argument, going to add to the work queue")
         pdf_work_paths = set()
-        tarball_work_paths = []  # List of lists, each inner list is PDFs from one tarball
+        tarball_paths = []  # Individual tarball paths to process
 
         for pdf_path in args.pdfs:
-            # Check if this is a tar.gz file (S3 or local)
-            is_tarball = pdf_path.lower().endswith(".tar.gz") or pdf_path.lower().endswith(".tgz")
-
-            if is_tarball:
-                logger.info(f"Processing tarball at {pdf_path}")
-                try:
-                    internal_pdfs = list_pdfs_in_tarball(pdf_path, pdf_s3)
-                    if internal_pdfs:
-                        # Create tarball::internal_path format for each PDF
-                        tarball_pdf_paths = [f"{pdf_path}::{internal}" for internal in internal_pdfs]
-                        tarball_work_paths.append(tarball_pdf_paths)
-                        logger.info(f"Found {len(internal_pdfs)} PDFs in tarball {pdf_path}")
-                    else:
-                        logger.warning(f"No PDFs found in tarball {pdf_path}")
-                except Exception as e:
-                    logger.warning(f"Failed to read tarball {pdf_path}: {e}")
-            # Expand s3 paths
-            elif pdf_path.startswith("s3://"):
+            # Expand s3 glob paths first, then categorize results
+            if pdf_path.startswith("s3://"):
                 logger.info(f"Expanding s3 glob at {pdf_path}")
-                pdf_work_paths |= set(expand_s3_glob(pdf_s3, pdf_path))
+                expanded_paths = set(expand_s3_glob(pdf_s3, pdf_path))
+                for expanded_path in expanded_paths:
+                    if expanded_path.lower().endswith(".tar.gz") or expanded_path.lower().endswith(".tgz"):
+                        tarball_paths.append(expanded_path)
+                    else:
+                        pdf_work_paths.add(expanded_path)
             elif os.path.exists(pdf_path):
-                if (
+                # Check if this is a tar.gz file (local)
+                if pdf_path.lower().endswith(".tar.gz") or pdf_path.lower().endswith(".tgz"):
+                    tarball_paths.append(pdf_path)
+                elif (
                     pdf_path.lower().endswith(".pdf")
                     or pdf_path.lower().endswith(".png")
                     or pdf_path.lower().endswith(".jpg")
@@ -1322,6 +1314,22 @@ async def main():
                     raise ValueError(f"Unsupported file extension for {pdf_path}")
             else:
                 raise ValueError("pdfs argument needs to be either a local path, an s3 path, or an s3 glob pattern...")
+
+        # Now process tarballs to extract their PDF lists
+        tarball_work_paths = []  # List of lists, each inner list is PDFs from one tarball
+        for tarball_path in tarball_paths:
+            logger.info(f"Processing tarball at {tarball_path}")
+            try:
+                internal_pdfs = list_pdfs_in_tarball(tarball_path, pdf_s3)
+                if internal_pdfs:
+                    # Create tarball::internal_path format for each PDF
+                    tarball_pdf_paths = [f"{tarball_path}::{internal}" for internal in internal_pdfs]
+                    tarball_work_paths.append(tarball_pdf_paths)
+                    logger.info(f"Found {len(internal_pdfs)} PDFs in tarball {tarball_path}")
+                else:
+                    logger.warning(f"No PDFs found in tarball {tarball_path}")
+            except Exception as e:
+                logger.warning(f"Failed to read tarball {tarball_path}: {e}")
 
         logger.info(f"Found {len(pdf_work_paths):,} regular pdf paths and {len(tarball_work_paths):,} tarballs to add")
 
