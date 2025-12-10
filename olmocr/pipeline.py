@@ -874,7 +874,7 @@ async def vllm_server_host(model_name_or_path, args, semaphore, unknown_args=Non
 
 
 async def vllm_server_ready(args):
-    max_attempts = 300
+    max_attempts = args.max_server_ready_timeout
     delay_sec = 1
     url = f"{args.server.rstrip('/')}/models"
 
@@ -1199,6 +1199,7 @@ async def main():
     parser.add_argument("--max_page_error_rate", type=float, default=0.004, help="Rate of allowable failed pages in a document, 1/250 by default")
     parser.add_argument("--workers", type=int, default=20, help="Number of workers to run at a time")
     parser.add_argument("--max_concurrent_requests", type=int, default=1600, help="Max number of concurrent VLLM server requests at a time.")
+    parser.add_argument("--max_server_ready_timeout", type=int, default=600, help="Number of seconds to wait for vllm to become ready before exiting.")
     parser.add_argument("--apply_filter", action="store_true", help="Apply basic filtering to English pdfs which are not forms, and not likely seo spam")
     parser.add_argument("--stats", action="store_true", help="Instead of running any job, reports some statistics about the current workspace")
     parser.add_argument("--markdown", action="store_true", help="Also write natural text to markdown files preserving the folder structure of the input pdfs")
