@@ -61,18 +61,12 @@ logger.propagate = False
 server_logger = logging.getLogger("vllm")
 server_logger.propagate = False
 
-file_handler = logging.FileHandler("olmocr-pipeline-debug.log", mode="a")
-file_handler.setLevel(logging.DEBUG)
-file_handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
-
 console_handler = logging.StreamHandler()
 console_handler.setLevel(logging.INFO)
 console_handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
 
-# Add handlers to the logger
-logger.addHandler(file_handler)
+# Add console handler to loggers (file handler added later if disk logging enabled)
 logger.addHandler(console_handler)
-server_logger.addHandler(file_handler)
 server_logger.addHandler(console_handler)
 
 # Quiet logs from pypdf
@@ -1211,6 +1205,14 @@ async def main():
     parser.add_argument("--target_longest_image_dim", type=int, help="Dimension on longest side to use for rendering the pdf pages", default=1288)
     parser.add_argument("--target_anchor_text_len", type=int, help="Maximum amount of anchor text to use (characters), not used for new models", default=-1)
     parser.add_argument("--guided_decoding", action="store_true", help="Enable guided decoding for model YAML type outputs")
+    parser.add_argument(
+        "--disk_logging",
+        type=str,
+        nargs="?",
+        const="olmocr-pipeline-debug.log",
+        default=None,
+        help="Enable writing logs to disk, optionally specify filename (default: olmocr-pipeline-debug.log)",
+    )
 
     server_group = parser.add_argument_group("Server arguments, to specify where your VLLM inference engine is running")
     server_group.add_argument(
@@ -1244,6 +1246,14 @@ async def main():
     beaker_group.add_argument("--beaker_priority", type=str, default="normal", help="Beaker priority level for the job")
 
     args, unknown_args = parser.parse_known_args()
+
+    # Set up file logging if enabled
+    if args.disk_logging:
+        file_handler = logging.FileHandler(args.disk_logging, mode="a")
+        file_handler.setLevel(logging.DEBUG)
+        file_handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+        logger.addHandler(file_handler)
+        server_logger.addHandler(file_handler)
 
     logger.info(
         "If you run out of GPU memory during start-up or get 'KV cache is larger than available memory' errors, retry with lower values, e.g. --gpu_memory_utilization 0.80  --max_model_len 16384"
