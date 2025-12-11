@@ -17,7 +17,6 @@ import tarfile
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass
 from functools import cache
 from io import BytesIO
@@ -402,6 +401,7 @@ async def process_page(args, worker_id: int, pdf_orig_path: str, pdf_local_path:
     metrics.add_metrics(failed_pages=1)
     await tracker.track_work(worker_id, f"{pdf_orig_path}-{page_num}", "errored")
 
+    # This returns the fallback case, using pdftotext
     return PageResult(
         pdf_orig_path,
         page_num,
@@ -488,38 +488,27 @@ async def process_single_pdf(args, worker_id: int, pdf_orig_path: str, local_pdf
         page_tasks = []
         page_results = []
 
-        try:
-            async with asyncio.TaskGroup() as tg:
-                for page_num in range(1, num_pages + 1):
-                    task = tg.create_task(process_page(args, worker_id, pdf_orig_path, local_pdf_path, page_num))
-                    page_tasks.append(task)
+        async with asyncio.TaskGroup() as tg:
+            for page_num in range(1, num_pages + 1):
+                task = tg.create_task(process_page(args, worker_id, pdf_orig_path, local_pdf_path, page_num))
+                page_tasks.append(task)
 
-            # Collect the results from the entire task group, assuming no exceptions
-            page_results = [task.result() for task in page_tasks]
+        # Collect the results from the entire task group, assuming no exceptions, if there is an exception propagated to this point in any page, it will abort the PDF itself
+        page_results = [task.result() for task in page_tasks]
 
-            num_fallback_pages = sum(page_result.is_fallback for page_result in page_results)
+        num_fallback_pages = sum(page_result.is_fallback for page_result in page_results)
 
-            if num_fallback_pages / num_pages > args.max_page_error_rate:
-                logger.error(
-                    f"Document {pdf_orig_path} has {num_fallback_pages} fallback pages out of {num_pages} exceeding max_page_error_rate of {args.max_page_error_rate}, discarding document."
-                )
-                return None
-            elif num_fallback_pages > 0:
-                logger.warning(
-                    f"Document {pdf_orig_path} processed with {num_fallback_pages} fallback pages out of {num_pages}, proceeding to build Dolma document."
-                )
-
-            return build_dolma_document(pdf_orig_path, page_results)
-        except Exception as e:
-            # Check for ExceptionGroup with BrokenProcessPool
-            if isinstance(e, ExceptionGroup):
-                broken_pool, other = e.split(BrokenProcessPool)
-                if broken_pool is not None:  # Found at least one BrokenProcessPool
-                    logger.critical("Encountered BrokenProcessPool, exiting process.")
-                    sys.exit(1)
-
-            logger.exception(f"Exception in process_single_pdf for {pdf_orig_path}: {e}")
+        if num_fallback_pages / num_pages > args.max_page_error_rate:
+            logger.error(
+                f"Document {pdf_orig_path} has {num_fallback_pages} fallback pages out of {num_pages} exceeding max_page_error_rate of {args.max_page_error_rate}, discarding document."
+            )
             return None
+        elif num_fallback_pages > 0:
+            logger.warning(
+                f"Document {pdf_orig_path} processed with {num_fallback_pages} fallback pages out of {num_pages}, proceeding to build Dolma document."
+            )
+
+        return build_dolma_document(pdf_orig_path, page_results)
     except Exception as e:
         logger.exception(f"Exception in process_single_pdf for {pdf_orig_path}: {e}")
         return None
