@@ -186,7 +186,7 @@ We also ship a comprehensive benchmark suite covering over 7,000 test cases acro
 ### Installation
 
 Requirements:
- - Recent NVIDIA GPU (tested on RTX 4090, L40S, A100, H100) with at least 15 GB of GPU RAM
+ - Recent NVIDIA GPU (tested on RTX 4090, L40S, A100, H100) with at least 12 GB of GPU RAM
  - 30GB of free disk space
 
 You will need to install poppler-utils and additional fonts for rendering PDF images.
