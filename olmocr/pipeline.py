@@ -1019,8 +1019,9 @@ def submit_beaker_job(args):
                 ),
                 image=ImageSource(beaker=beaker_image),
                 command=["python", "-m", "olmocr.pipeline"] + args_list,
-                env_vars=[EnvVar(name="BEAKER_JOB_NAME", value=task_name), EnvVar(name="OWNER", value=owner)] + env_var_secrets,
-                resources=TaskResources(gpu_count=1, memory="100GiB"), # Have to set a memory limit, otherwise VLLM may use too much on its own
+                env_vars=[EnvVar(name="BEAKER_JOB_NAME", value=task_name), EnvVar(name="OWNER", value=owner), EnvVar(name="HF_HUB_OFFLINE", value="1")]
+                + env_var_secrets,
+                resources=TaskResources(gpu_count=1, memory="100GiB"),  # Have to set a memory limit, otherwise VLLM may use too much on its own
                 constraints=Constraints(cluster=args.beaker_cluster if isinstance(args.beaker_cluster, list) else [args.beaker_cluster]),
                 result=ResultSpec(path="/noop-results"),
             )
