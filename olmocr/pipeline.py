@@ -15,7 +15,6 @@ import ssl
 import sys
 import tarfile
 import tempfile
-import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from functools import cache
