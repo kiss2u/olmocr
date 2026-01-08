@@ -593,16 +593,13 @@ def build_dolma_document(pdf_orig_path, page_results):
     return dolma_doc
 
 
-async def worker(args, work_queue: WorkQueue, semaphore, worker_id):
+async def worker(args, work_queue: WorkQueue, worker_id):
     while True:
-        # Wait until allowed to proceed
-        await semaphore.acquire()
 
         work_item = await work_queue.get_work()
 
         if work_item is None:
             logger.info(f"Worker {worker_id} exiting due to empty queue")
-            semaphore.release()
             break
 
         logger.info(f"Worker {worker_id} processing work item {work_item.hash}")
@@ -703,14 +700,9 @@ async def worker(args, work_queue: WorkQueue, semaphore, worker_id):
             await work_queue.mark_done(work_item)
         except Exception as e:
             logger.exception(f"Exception occurred while processing work_hash {work_item.hash}: {e}")
-        finally:
-            # Temporary fix for https://github.com/allenai/olmocr/issues/383, for now we will just release the sempahore
-            # as each worker finishes, so that the process can quit in the end.
-            if args.server:
-                semaphore.release()
 
 
-async def vllm_server_task(model_name_or_path, args, semaphore, unknown_args=None):
+async def vllm_server_task(model_name_or_path, args, unknown_args=None):
     cmd = [
         "vllm",
         "serve",
@@ -758,12 +750,11 @@ async def vllm_server_task(model_name_or_path, args, semaphore, unknown_args=Non
 
     # Shared variables between tasks
     last_running_req, peak_running_req, last_queue_req = 0, 0, 0
-    running_reqs_decreased = False
     server_printed_ready_message = False
-    last_semaphore_release = time.time()
+
 
     async def process_line(line):
-        nonlocal last_running_req, last_queue_req, peak_running_req, running_reqs_decreased, last_semaphore_release, server_printed_ready_message
+        nonlocal last_running_req, last_queue_req, peak_running_req, server_printed_ready_message
         server_logger.info(line)
 
         if "Detected errors during sampling" in line:
@@ -772,7 +763,6 @@ async def vllm_server_task(model_name_or_path, args, semaphore, unknown_args=Non
 
         if not server_printed_ready_message and ("The server is fired up and ready to roll!" in line or "Starting vLLM API server" in line):
             server_printed_ready_message = True
-            last_semaphore_release = time.time()
 
         if match := re.search(r"Running: (\d+)", line):
             current_running = int(match.group(1))
@@ -780,10 +770,6 @@ async def vllm_server_task(model_name_or_path, args, semaphore, unknown_args=Non
             if current_running > peak_running_req:
                 peak_running_req = current_running
                 logger.info(f"New peak running requests: {peak_running_req}")
-            # Check for negative derivative (decrease in running requests), to not overload VLLM in times of high contention
-            if current_running < last_running_req and not running_reqs_decreased:
-                running_reqs_decreased = True
-                logger.info(f"Running requests decreased: {last_running_req} -> {current_running}")
             last_running_req = current_running
 
         if match := re.search(r"(?:Waiting|Pending):\s*(\d+)", line):
@@ -801,33 +787,10 @@ async def vllm_server_task(model_name_or_path, args, semaphore, unknown_args=Non
             except Exception as ex:
                 logger.warning(f"Got {ex} when reading log line from inference server, skipping")
 
-    async def timeout_task():
-        nonlocal last_running_req, last_queue_req, peak_running_req, last_semaphore_release, running_reqs_decreased
-        try:
-            while True:
-                await asyncio.sleep(1)
-
-                # Check if we should release the semaphore
-                should_release = (
-                    server_printed_ready_message
-                    and last_queue_req <= int(peak_running_req * 0.2)
-                    and time.time() - last_semaphore_release > 30
-                    and semaphore.locked()
-                    and (last_running_req == 0 or running_reqs_decreased)
-                )
-
-                if should_release:
-                    semaphore.release()
-                    running_reqs_decreased = False  # Reset flag after release
-                    last_semaphore_release = time.time()
-                    logger.info(f"Semaphore released at {last_running_req} running {last_queue_req} queued, peak: {peak_running_req})")
-        except asyncio.CancelledError:
-            pass  # Clean up if the task is cancelled
 
     # Start tasks to read stdout, stderr, and handle timeout logic
     stdout_task = asyncio.create_task(read_stream(proc.stdout))
     stderr_task = asyncio.create_task(read_stream(proc.stderr))
-    timeout_task = asyncio.create_task(timeout_task())
 
     try:
         await proc.wait()
@@ -840,16 +803,15 @@ async def vllm_server_task(model_name_or_path, args, semaphore, unknown_args=Non
             logger.warning("VLLM server did not terminate within 10 seconds")
         raise
 
-    timeout_task.cancel()
-    await asyncio.gather(stdout_task, stderr_task, timeout_task, return_exceptions=True)
+    await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
 
 
-async def vllm_server_host(model_name_or_path, args, semaphore, unknown_args=None):
+async def vllm_server_host(model_name_or_path, args, unknown_args=None):
     MAX_RETRIES = 5
     retry = 0
 
     while retry < MAX_RETRIES:
-        await vllm_server_task(model_name_or_path, args, semaphore, unknown_args)
+        await vllm_server_task(model_name_or_path, args, unknown_args)
         logger.warning("VLLM server task ended")
         retry += 1
 
@@ -1411,16 +1373,11 @@ async def main():
     if qsize == 0:
         logger.info("No work to do, exiting")
         return
-    # Create a semaphore to control worker access
-    # We only allow one worker to move forward with requests, until the server has no more requests in its queue
-    # This lets us get full utilization by having many workers, but also to be outputting dolma docs as soon as possible
-    # As soon as one worker is no longer saturating the gpu, the next one can start sending requests
-    semaphore = asyncio.Semaphore(1)
 
     # Start local vLLM instance if not using external one
     vllm_server = None
     if use_internal_server:
-        vllm_server = asyncio.create_task(vllm_server_host(model_name_or_path, args, semaphore, unknown_args))
+        vllm_server = asyncio.create_task(vllm_server_host(model_name_or_path, args, unknown_args))
 
     await vllm_server_ready(args)
 
@@ -1429,7 +1386,7 @@ async def main():
     # Create worker tasks to process the queue concurrently.
     worker_tasks = []
     for i in range(args.workers):
-        task = asyncio.create_task(worker(args, work_queue, semaphore, worker_id=i))
+        task = asyncio.create_task(worker(args, work_queue, worker_id=i))
         worker_tasks.append(task)
 
     # Wait for all worker tasks to finish
