@@ -752,7 +752,6 @@ async def vllm_server_task(model_name_or_path, args, unknown_args=None):
     last_running_req, peak_running_req, last_queue_req = 0, 0, 0
     server_printed_ready_message = False
 
-
     async def process_line(line):
         nonlocal last_running_req, last_queue_req, peak_running_req, server_printed_ready_message
         server_logger.info(line)
@@ -786,7 +785,6 @@ async def vllm_server_task(model_name_or_path, args, unknown_args=None):
                 await process_line(line)
             except Exception as ex:
                 logger.warning(f"Got {ex} when reading log line from inference server, skipping")
-
 
     # Start tasks to read stdout, stderr, and handle timeout logic
     stdout_task = asyncio.create_task(read_stream(proc.stdout))
