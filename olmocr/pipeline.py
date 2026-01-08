@@ -934,6 +934,7 @@ def submit_beaker_job(args):
         ImageSource,
         Priority,
         ResultSpec,
+        RetrySpec,
         SecretNotFound,
         TaskContext,
         TaskResources,
@@ -1026,6 +1027,7 @@ def submit_beaker_job(args):
                 result=ResultSpec(path="/noop-results"),
             )
         ],
+        retry=RetrySpec(allowed_task_retries=10),
     )
 
     experiment_data = b.experiment.create(spec=experiment_spec, workspace=args.beaker_workspace)
