@@ -79,7 +79,7 @@ metrics = MetricsKeeper(window=60 * 5)
 tracker = WorkerTracker()
 
 # Global variable for vLLM queue status (updated by vllm_server_task)
-vllm_queued_requests = 0
+vllm_queued_requests = None
 
 # Temperature values for retry attempts - higher temperature helps overcome repetition issues
 TEMPERATURE_BY_ATTEMPT = [0.1, 0.1, 0.2, 0.3, 0.5, 0.8, 0.9, 1.0]
@@ -513,6 +513,7 @@ async def process_single_pdf(args, worker_id: int, pdf_orig_path: str, local_pdf
 
         # Collect the results from the entire task group, assuming no exceptions, if there is an exception propagated to this point in any page, it will abort the PDF itself
         page_results = [task.result() for task in page_tasks]
+        assert all(page_result.is_valid for page_result in page_results)
 
         num_fallback_pages = sum(page_result.is_fallback for page_result in page_results)
 
