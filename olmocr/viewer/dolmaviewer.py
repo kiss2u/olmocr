@@ -2,8 +2,10 @@ import argparse
 import glob
 import json
 import os
+import tarfile
 import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from io import BytesIO
 
 import boto3
 import smart_open
@@ -13,6 +15,41 @@ from tqdm import tqdm
 
 from olmocr.data.renderpdf import render_pdf_to_base64webp
 from olmocr.s3_utils import get_s3_bytes, parse_s3_path
+
+
+def get_pdf_bytes_from_source(s3_client, source_file):
+    """
+    Get PDF bytes from a source file path.
+    Supports both regular S3/local paths and tar.gz archives with :: syntax.
+
+    Format for tar.gz: s3://bucket/path/archive.tar.gz::filename_inside.pdf
+    """
+    if "::" in source_file:
+        # Parse tar.gz path and internal filename
+        tar_path, internal_filename = source_file.rsplit("::", 1)
+
+        # Download the tar.gz file
+        tar_bytes = get_s3_bytes(s3_client, tar_path)
+
+        # Extract the specific file from the tar.gz
+        with tarfile.open(fileobj=BytesIO(tar_bytes), mode="r:gz") as tar:
+            # Look for the file in the archive
+            for member in tar.getmembers():
+                if member.name == internal_filename or member.name.endswith("/" + internal_filename):
+                    f = tar.extractfile(member)
+                    if f is not None:
+                        return f.read()
+
+            # If not found by exact match, try basename match
+            for member in tar.getmembers():
+                if os.path.basename(member.name) == internal_filename:
+                    f = tar.extractfile(member)
+                    if f is not None:
+                        return f.read()
+
+            raise ValueError(f"File '{internal_filename}' not found in archive '{tar_path}'")
+    else:
+        return get_s3_bytes(s3_client, source_file)
 
 
 def read_jsonl(paths):
@@ -56,7 +93,7 @@ def process_document(data, s3_client, template, output_dir):
     # Generate base64 image of the corresponding PDF page
     local_pdf = tempfile.NamedTemporaryFile("wb+", suffix=".pdf", delete=False)
     try:
-        pdf_bytes = get_s3_bytes(s3_client, source_file)
+        pdf_bytes = get_pdf_bytes_from_source(s3_client, source_file)
         if pdf_bytes is None:
             print(f"Failed to retrieve PDF from {source_file}")
             return
@@ -88,9 +125,11 @@ def process_document(data, s3_client, template, output_dir):
         os.unlink(local_pdf.name)
 
     # Generate pre-signed URL if source_file is an S3 path
+    # For tar.gz paths with ::, generate URL for the tar.gz file
     s3_link = None
-    if source_file and source_file.startswith("s3://"):
-        bucket_name, key_name = parse_s3_path(source_file)
+    s3_path_for_url = source_file.rsplit("::", 1)[0] if source_file and "::" in source_file else source_file
+    if s3_path_for_url and s3_path_for_url.startswith("s3://"):
+        bucket_name, key_name = parse_s3_path(s3_path_for_url)
         s3_link = generate_presigned_url(s3_client, bucket_name, key_name)
 
     # Prepare metadata for display
@@ -141,7 +180,7 @@ def process_document_for_merge(data, s3_client):
     # Generate base64 image of the corresponding PDF page
     local_pdf = tempfile.NamedTemporaryFile("wb+", suffix=".pdf", delete=False)
     try:
-        pdf_bytes = get_s3_bytes(s3_client, source_file)
+        pdf_bytes = get_pdf_bytes_from_source(s3_client, source_file)
         if pdf_bytes is None:
             print(f"Failed to retrieve PDF from {source_file}")
             return None
@@ -173,9 +212,11 @@ def process_document_for_merge(data, s3_client):
         os.unlink(local_pdf.name)
 
     # Generate pre-signed URL if source_file is an S3 path
+    # For tar.gz paths with ::, generate URL for the tar.gz file
     s3_link = None
-    if source_file and source_file.startswith("s3://"):
-        bucket_name, key_name = parse_s3_path(source_file)
+    s3_path_for_url = source_file.rsplit("::", 1)[0] if source_file and "::" in source_file else source_file
+    if s3_path_for_url and s3_path_for_url.startswith("s3://"):
+        bucket_name, key_name = parse_s3_path(s3_path_for_url)
         s3_link = generate_presigned_url(s3_client, bucket_name, key_name)
 
     # Prepare metadata for display
