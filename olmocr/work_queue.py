@@ -233,6 +233,9 @@ class WorkQueue:
 class LocalBackend(Backend):
     """Local file system backend."""
 
+    # Default timeout for filesystem ops, not to block queue, in seconds
+    DEFAULT_FS_TIMEOUT = 120
+
     def __init__(self, workspace_path: str):
         self.workspace_path = os.path.abspath(workspace_path)
         self._index_path = os.path.join(self.workspace_path, "work_index_list.csv.zstd")
@@ -242,6 +245,17 @@ class LocalBackend(Backend):
         os.makedirs(self.workspace_path, exist_ok=True)
         os.makedirs(self._done_flags_dir, exist_ok=True)
         os.makedirs(self._locks_dir, exist_ok=True)
+
+    async def _run_with_timeout(self, func, *args, operation_name: str = "filesystem operation"):
+        """Run a blocking function in a thread with timeout and logging."""
+        logger.debug(f"LocalBackend: Starting {operation_name}")
+        try:
+            result = await asyncio.wait_for(asyncio.to_thread(func, *args), timeout=LocalBackend.DEFAULT_FS_TIMEOUT)
+            logger.debug(f"LocalBackend: Completed {operation_name}")
+            return result
+        except asyncio.TimeoutError:
+            logger.error(f"LocalBackend: TIMEOUT after {LocalBackend.DEFAULT_FS_TIMEOUT}s on {operation_name}")
+            raise TimeoutError(f"Filesystem operation '{operation_name}' timed out after {LocalBackend.DEFAULT_FS_TIMEOUT} seconds")
 
     def _download_zstd_csv_local(self, local_path: str) -> List[str]:
         """
@@ -299,12 +313,17 @@ class LocalBackend(Backend):
                 return None
             return datetime.datetime.fromtimestamp(os.path.getmtime(path), datetime.timezone.utc)
 
-        return await asyncio.to_thread(_get_mtime)
+        return await self._run_with_timeout(_get_mtime, operation_name=f"get_mtime({path})")
 
     async def is_worker_lock_taken(self, work_hash: str, worker_lock_timeout_secs: int = 1800) -> bool:
         """Check if a worker lock is taken and not stale."""
         lock_path = self._get_worker_lock_path(work_hash)
-        lock_mtime = await self._get_object_mtime(lock_path)
+        try:
+            lock_mtime = await self._get_object_mtime(lock_path)
+        except (TimeoutError, Exception) as e:
+            # On timeout or error, return False to let this worker attempt the work
+            logger.warning(f"is_worker_lock_taken({work_hash}) failed: {e}, returning False")
+            return False
 
         if not lock_mtime:
             return False
@@ -313,39 +332,56 @@ class LocalBackend(Backend):
         return (now - lock_mtime).total_seconds() <= worker_lock_timeout_secs
 
     async def create_worker_lock(self, work_hash: str) -> None:
-        """Create a worker lock for a work hash."""
+        """Create a worker lock for a work hash. Best-effort, does not fail on timeout."""
         lock_path = self._get_worker_lock_path(work_hash)
 
         def _create() -> None:
             with open(lock_path, "wb"):
                 pass
 
-        await asyncio.to_thread(_create)
+        try:
+            await self._run_with_timeout(_create, operation_name=f"create_worker_lock({work_hash})")
+        except (TimeoutError, Exception) as e:
+            # Best effort - if we can't create lock, still proceed (duplicate work is okay)
+            logger.warning(f"create_worker_lock({work_hash}) failed: {e}, proceeding anyway")
 
     async def delete_worker_lock(self, work_hash: str) -> None:
-        """Delete the worker lock for a work hash if it exists."""
+        """Delete the worker lock for a work hash if it exists. Best-effort, does not fail on timeout."""
         lock_path = self._get_worker_lock_path(work_hash)
 
         def _delete() -> None:
             if os.path.exists(lock_path):
                 os.remove(lock_path)
 
-        await asyncio.to_thread(_delete)
+        try:
+            await self._run_with_timeout(_delete, operation_name=f"delete_worker_lock({work_hash})")
+        except (TimeoutError, Exception) as e:
+            # Best effort - if we can't delete lock, just log and continue
+            logger.warning(f"delete_worker_lock({work_hash}) failed: {e}, proceeding anyway")
 
     async def is_completed(self, work_hash: str) -> bool:
         """Check if a work item has been completed."""
         done_flag_path = self._get_done_flag_path(work_hash)
-        return await self._get_object_mtime(done_flag_path) is not None
+        try:
+            return await self._get_object_mtime(done_flag_path) is not None
+        except (TimeoutError, Exception) as e:
+            # On timeout or error, return False to let worker attempt the work
+            logger.warning(f"is_completed({work_hash}) failed: {e}, returning False")
+            return False
 
     async def create_done_flag(self, work_hash: str) -> None:
-        """Create a done flag for a work hash."""
+        """Create a done flag for a work hash. Best-effort, does not fail on timeout."""
         done_flag_path = self._get_done_flag_path(work_hash)
 
         def _create() -> None:
             with open(done_flag_path, "wb"):
                 pass
 
-        await asyncio.to_thread(_create)
+        try:
+            await self._run_with_timeout(_create, operation_name=f"create_done_flag({work_hash})")
+        except (TimeoutError, Exception) as e:
+            # Best effort - work was done, just couldn't mark it. Log and continue.
+            logger.warning(f"create_done_flag({work_hash}) failed: {e}, proceeding anyway")
 
 
 class S3Backend(Backend):
