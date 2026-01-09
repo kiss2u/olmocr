@@ -100,6 +100,7 @@ class PageResult:
     input_tokens: int
     output_tokens: int
     is_fallback: bool
+    is_valid: bool
 
 
 async def build_page_query(local_pdf_path: str, page: int, target_longest_image_dim: int, image_rotation: int = 0, model_name: str = "olmocr") -> dict:
@@ -141,7 +142,7 @@ async def build_page_query(local_pdf_path: str, page: int, target_longest_image_
             }
         ],
         "max_tokens": MAX_TOKENS,
-        "temperature": 0.0, # This will get overridden later
+        "temperature": 0.0,  # This will get overridden later
     }
 
 
@@ -193,11 +194,13 @@ async def try_single_page(
             server_output_tokens=base_response_data["usage"].get("completion_tokens", 0),
         )
 
+        is_valid = True
+
         if base_response_data["usage"]["total_tokens"] > MODEL_MAX_CONTEXT:
-            return None
+            is_valid = False
 
         if base_response_data["choices"][0]["finish_reason"] != "stop":
-            return None
+            is_valid = False
 
         model_response_markdown = base_response_data["choices"][0]["message"]["content"]
         parser = FrontMatterParser(front_matter_class=PageResponse)
@@ -211,6 +214,7 @@ async def try_single_page(
             input_tokens=base_response_data["usage"].get("prompt_tokens", 0),
             output_tokens=base_response_data["usage"].get("completion_tokens", 0),
             is_fallback=False,
+            is_valid=is_valid,
         )
     except asyncio.CancelledError:
         raise
@@ -234,6 +238,7 @@ def make_fallback_result(pdf_orig_path: str, pdf_local_path: str, page_num: int)
         input_tokens=0,
         output_tokens=0,
         is_fallback=True,
+        is_valid=True,
     )
 
 
@@ -247,27 +252,30 @@ async def process_page(args, worker_id: int, pdf_orig_path: str, pdf_local_path:
     """
     MAX_RETRIES = args.max_page_retries
     retry_attempts = list(range(1, MAX_RETRIES))
+    cumulative_rotation = 0
 
     await tracker.track_work(worker_id, f"{pdf_orig_path}-{page_num}", "started")
 
     # === First attempt ===
-    result = await try_single_page(args, pdf_orig_path, pdf_local_path, page_num, attempt=0, rotation=0)
+    result = await try_single_page(args, pdf_orig_path, pdf_local_path, page_num, attempt=0, rotation=cumulative_rotation)
 
-    if result is not None and result.response.is_rotation_valid:
-        # Success on first try
+    if result is not None and not result.response.is_rotation_valid:
+        cumulative_rotation = result.response.rotation_correction % 360
+
+    # Success on first try
+    if result is not None and result.is_valid and result.response.is_rotation_valid:
         metrics.add_metrics(**{"completed_pages": 1, "finished_on_attempt_0": 1})
         await tracker.track_work(worker_id, f"{pdf_orig_path}-{page_num}", "finished")
         return result
 
     # === Rotation error path: sequential retries with model feedback ===
     if result is not None and not result.response.is_rotation_valid:
-        cumulative_rotation = result.response.rotation_correction % 360
         logger.info(f"Rotation error for {pdf_orig_path}-{page_num}, retrying sequentially with rotation={cumulative_rotation}")
 
         for attempt in retry_attempts:
             result = await try_single_page(args, pdf_orig_path, pdf_local_path, page_num, attempt, cumulative_rotation)
 
-            if result is not None and result.response.is_rotation_valid:
+            if result is not None and result.is_valid and result.response.is_rotation_valid:
                 metrics.add_metrics(**{"completed_pages": 1, f"finished_on_attempt_{attempt}": 1})
                 await tracker.track_work(worker_id, f"{pdf_orig_path}-{page_num}", "finished")
                 return result
@@ -276,7 +284,7 @@ async def process_page(args, worker_id: int, pdf_orig_path: str, pdf_local_path:
                 cumulative_rotation = (cumulative_rotation + result.response.rotation_correction) % 360
 
         # If you tried many times and all rotations were invalid, but you at least had a valid response, then return that in the end
-        if result is not None:
+        if result is not None and result.is_valid:
             metrics.add_metrics(**{"completed_pages": 1, f"finished_on_attempt_{MAX_RETRIES}": 1})
             await tracker.track_work(worker_id, f"{pdf_orig_path}-{page_num}", "finished")
             return result
@@ -289,26 +297,23 @@ async def process_page(args, worker_id: int, pdf_orig_path: str, pdf_local_path:
 
     # === Non-rotation error path: sequential, but switch to parallel if queue empties ===
     for i, attempt in enumerate(retry_attempts):
-        result = await try_single_page(args, pdf_orig_path, pdf_local_path, page_num, attempt, rotation=0)
+        result = await try_single_page(args, pdf_orig_path, pdf_local_path, page_num, attempt, rotation=cumulative_rotation)
 
-        if result is not None and result.response.is_rotation_valid:
+        if result is not None and result.is_valid and result.response.is_rotation_valid:
             metrics.add_metrics(**{"completed_pages": 1, f"finished_on_attempt_{attempt}": 1})
             await tracker.track_work(worker_id, f"{pdf_orig_path}-{page_num}", "finished")
             return result
 
         # After each failed attempt, check if queue is empty - if so, fire remaining in parallel
-        remaining_attempts = retry_attempts[i + 1:]
+        remaining_attempts = retry_attempts[i + 1 :]
         if remaining_attempts and vllm_queued_requests == 0:
             logger.info(f"Queue empty, firing {len(remaining_attempts)} parallel retries for {pdf_orig_path}-{page_num}")
-            tasks = [
-                asyncio.create_task(try_single_page(args, pdf_orig_path, pdf_local_path, page_num, a, rotation=0))
-                for a in remaining_attempts
-            ]
+            tasks = [asyncio.create_task(try_single_page(args, pdf_orig_path, pdf_local_path, page_num, a, rotation=0)) for a in remaining_attempts]
 
             for coro in asyncio.as_completed(tasks):
                 try:
                     result = await coro
-                    if result is not None and result.response.is_rotation_valid:
+                    if result is not None and result.is_valid and result.response.is_rotation_valid:
                         for t in tasks:
                             t.cancel()
                         metrics.add_metrics(**{"completed_pages": 1, "finished_on_parallel_retry": 1})
@@ -319,7 +324,7 @@ async def process_page(args, worker_id: int, pdf_orig_path: str, pdf_local_path:
             break  # Parallel attempts exhausted
 
     # If you tried many times and all rotations were invalid, but you at least had a valid response, then return that in the end
-    if result is not None:
+    if result is not None and result.is_valid:
         metrics.add_metrics(**{"completed_pages": 1, f"finished_on_attempt_{MAX_RETRIES}": 1})
         await tracker.track_work(worker_id, f"{pdf_orig_path}-{page_num}", "finished")
         return result
@@ -604,6 +609,7 @@ def build_dolma_document(pdf_orig_path, page_results):
         },
     }
     return dolma_doc
+
 
 def get_markdown_path(workspace: str, source_file: str) -> str:
     """
