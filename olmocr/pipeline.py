@@ -91,50 +91,6 @@ max_concurrent_requests_limit = asyncio.BoundedSemaphore(1)  # Actual value set 
 get_pdf_filter = cache(lambda: PdfFilter(languages_to_keep={Language.ENGLISH, None}, apply_download_spam_check=True, apply_form_check=True))
 
 
-def get_markdown_path(workspace: str, source_file: str) -> str:
-    """
-    Calculate the markdown output path for a given source file.
-
-    Args:
-        workspace: The workspace directory path
-        source_file: The original source file path (can be S3, local, or tarball::internal_path)
-
-    Returns:
-        The full path where the markdown file should be written
-    """
-    # Handle tarball paths (format: tarball_path::internal_path)
-    if "::" in source_file:
-        tarball_path, internal_path = source_file.split("::", 1)
-        # Use tarball basename + internal path structure
-        tarball_basename = os.path.splitext(os.path.basename(tarball_path))[0]
-        if tarball_basename.endswith(".tar"):
-            tarball_basename = tarball_basename[:-4]
-        relative_path = os.path.join(tarball_basename, internal_path)
-    elif source_file.startswith("s3://"):
-        # Extract the path after the bucket name for S3 sources
-        parsed = urlparse(source_file)
-        relative_path = parsed.path.lstrip("/")
-    else:
-        # For local files, strip leading slash to make it relative
-        relative_path = source_file.lstrip("/")
-
-    # Sanitize path: remove any .. components to prevent path traversal
-    parts = relative_path.split("/")
-    safe_parts = [p for p in parts if p and p != ".."]
-    relative_path = "/".join(safe_parts)
-
-    # Change the extension to .md
-    md_filename = os.path.splitext(os.path.basename(relative_path))[0] + ".md"
-    # Get the directory path without the filename
-    dir_path = os.path.dirname(relative_path)
-
-    # Create the output markdown path
-    markdown_dir = os.path.join(workspace, "markdown", dir_path)
-    markdown_path = os.path.join(markdown_dir, md_filename)
-
-    return markdown_path
-
-
 @dataclass(frozen=True)
 class PageResult:
     s3_path: str
@@ -185,8 +141,181 @@ async def build_page_query(local_pdf_path: str, page: int, target_longest_image_
             }
         ],
         "max_tokens": MAX_TOKENS,
-        "temperature": 0.0,
+        "temperature": 0.0, # This will get overridden later
     }
+
+
+async def try_single_page(
+    args,
+    pdf_orig_path: str,
+    pdf_local_path: str,
+    page_num: int,
+    attempt: int,
+    rotation: int,
+) -> PageResult | None:
+    """
+    Try processing a single page once. Returns PageResult on success, None on failure.
+    Does NOT handle retries - caller is responsible for retry logic.
+    """
+    COMPLETION_URL = f"{args.server.rstrip('/')}/chat/completions"
+    MODEL_MAX_CONTEXT = 16384
+
+    temp_idx = min(attempt, len(TEMPERATURE_BY_ATTEMPT) - 1)
+    temperature = TEMPERATURE_BY_ATTEMPT[temp_idx]
+
+    api_key = args.api_key if args.server and hasattr(args, "api_key") else None
+
+    try:
+        query = await build_page_query(
+            pdf_local_path,
+            page_num,
+            args.target_longest_image_dim,
+            image_rotation=rotation,
+            model_name=args.model,
+        )
+        query["temperature"] = temperature
+
+        if args.guided_decoding:
+            query["guided_regex"] = (
+                r"---\nprimary_language: (?:[a-z]{2}|null)\nis_rotation_valid: (?:True|False|true|false)\nrotation_correction: (?:0|90|180|270)\nis_table: (?:True|False|true|false)\nis_diagram: (?:True|False|true|false)\n(?:---|---\n[\s\S]+)"
+            )
+
+        async with max_concurrent_requests_limit:
+            status_code, response_body = await apost(COMPLETION_URL, json_data=query, api_key=api_key)
+
+        if status_code != 200:
+            return None
+
+        base_response_data = json.loads(response_body)
+
+        metrics.add_metrics(
+            server_input_tokens=base_response_data["usage"].get("prompt_tokens", 0),
+            server_output_tokens=base_response_data["usage"].get("completion_tokens", 0),
+        )
+
+        if base_response_data["usage"]["total_tokens"] > MODEL_MAX_CONTEXT:
+            return None
+
+        if base_response_data["choices"][0]["finish_reason"] != "stop":
+            return None
+
+        model_response_markdown = base_response_data["choices"][0]["message"]["content"]
+        parser = FrontMatterParser(front_matter_class=PageResponse)
+        front_matter, text = parser._extract_front_matter_and_text(model_response_markdown)
+        page_response = parser._parse_front_matter(front_matter, text)
+
+        return PageResult(
+            pdf_orig_path,
+            page_num,
+            page_response,
+            input_tokens=base_response_data["usage"].get("prompt_tokens", 0),
+            output_tokens=base_response_data["usage"].get("completion_tokens", 0),
+            is_fallback=False,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        return None
+
+
+def make_fallback_result(pdf_orig_path: str, pdf_local_path: str, page_num: int) -> PageResult:
+    """Create a fallback PageResult using pdftotext."""
+    return PageResult(
+        pdf_orig_path,
+        page_num,
+        PageResponse(
+            natural_text=get_anchor_text(pdf_local_path, page_num, pdf_engine="pdftotext"),
+            primary_language=None,
+            is_rotation_valid=True,
+            rotation_correction=0,
+            is_table=False,
+            is_diagram=False,
+        ),
+        input_tokens=0,
+        output_tokens=0,
+        is_fallback=True,
+    )
+
+
+async def process_page(args, worker_id: int, pdf_orig_path: str, pdf_local_path: str, page_num: int) -> PageResult:
+    """
+    Process a single page with retry logic:
+    1. Try first attempt
+    2. If success: return result
+    3. If rotation error: retry sequentially (need model feedback for rotation correction)
+    4. If other error: fire all remaining retries in parallel (if queue empty) or sequential
+    """
+    MAX_RETRIES = args.max_page_retries
+    retry_attempts = list(range(1, MAX_RETRIES))
+
+    await tracker.track_work(worker_id, f"{pdf_orig_path}-{page_num}", "started")
+
+    # === First attempt ===
+    result = await try_single_page(args, pdf_orig_path, pdf_local_path, page_num, attempt=0, rotation=0)
+
+    if result is not None and result.response.is_rotation_valid:
+        # Success on first try
+        metrics.add_metrics(**{"completed_pages": 1, "finished_on_attempt_0": 1})
+        await tracker.track_work(worker_id, f"{pdf_orig_path}-{page_num}", "finished")
+        return result
+
+    # === Rotation error path: sequential retries with model feedback ===
+    if result is not None and not result.response.is_rotation_valid:
+        cumulative_rotation = result.response.rotation_correction % 360
+        logger.info(f"Rotation error for {pdf_orig_path}-{page_num}, retrying sequentially with rotation={cumulative_rotation}")
+
+        for attempt in retry_attempts:
+            result = await try_single_page(args, pdf_orig_path, pdf_local_path, page_num, attempt, cumulative_rotation)
+
+            if result is not None and result.response.is_rotation_valid:
+                metrics.add_metrics(**{"completed_pages": 1, f"finished_on_attempt_{attempt}": 1})
+                await tracker.track_work(worker_id, f"{pdf_orig_path}-{page_num}", "finished")
+                return result
+
+            if result is not None:  # Another rotation correction needed
+                cumulative_rotation = (cumulative_rotation + result.response.rotation_correction) % 360
+
+        logger.error(f"Failed {pdf_orig_path}-{page_num} after {MAX_RETRIES} rotation retries")
+        metrics.add_metrics(failed_pages=1)
+        await tracker.track_work(worker_id, f"{pdf_orig_path}-{page_num}", "errored")
+        return make_fallback_result(pdf_orig_path, pdf_local_path, page_num)
+
+    # === Non-rotation error path: sequential, but switch to parallel if queue empties ===
+    for i, attempt in enumerate(retry_attempts):
+        result = await try_single_page(args, pdf_orig_path, pdf_local_path, page_num, attempt, rotation=0)
+
+        if result is not None and result.response.is_rotation_valid:
+            metrics.add_metrics(**{"completed_pages": 1, f"finished_on_attempt_{attempt}": 1})
+            await tracker.track_work(worker_id, f"{pdf_orig_path}-{page_num}", "finished")
+            return result
+
+        # After each failed attempt, check if queue is empty - if so, fire remaining in parallel
+        remaining_attempts = retry_attempts[i + 1:]
+        if remaining_attempts and vllm_queued_requests == 0:
+            logger.info(f"Queue empty, firing {len(remaining_attempts)} parallel retries for {pdf_orig_path}-{page_num}")
+            tasks = [
+                asyncio.create_task(try_single_page(args, pdf_orig_path, pdf_local_path, page_num, a, rotation=0))
+                for a in remaining_attempts
+            ]
+
+            for coro in asyncio.as_completed(tasks):
+                try:
+                    result = await coro
+                    if result is not None and result.response.is_rotation_valid:
+                        for t in tasks:
+                            t.cancel()
+                        metrics.add_metrics(**{"completed_pages": 1, "finished_on_parallel_retry": 1})
+                        await tracker.track_work(worker_id, f"{pdf_orig_path}-{page_num}", "finished")
+                        return result
+                except asyncio.CancelledError:
+                    continue
+            break  # Parallel attempts exhausted
+
+    # All retries exhausted
+    logger.error(f"Failed {pdf_orig_path}-{page_num} after {MAX_RETRIES} attempts")
+    metrics.add_metrics(failed_pages=1)
+    await tracker.track_work(worker_id, f"{pdf_orig_path}-{page_num}", "errored")
+    return make_fallback_result(pdf_orig_path, pdf_local_path, page_num)
 
 
 # Manual simple implementation of HTTP Post
@@ -288,197 +417,6 @@ async def apost(url, json_data, api_key=None):
                 await writer.wait_closed()
             except:
                 pass
-
-
-async def execute_retries(
-    args,
-    pdf_orig_path: str,
-    pdf_local_path: str,
-    page_num: int,
-    start_attempt: int,
-    cumulative_rotation: int,
-    parallel: bool,
-) -> PageResult | None:
-    """
-    Execute remaining retry attempts for a page.
-    If parallel=True, fire all at once and return first valid result.
-    If parallel=False, try one at a time sequentially.
-    Returns PageResult on success, None if all attempts fail.
-    """
-    COMPLETION_URL = f"{args.server.rstrip('/')}/chat/completions"
-    MAX_RETRIES = args.max_page_retries
-    MODEL_MAX_CONTEXT = 16384
-    attempts_to_try = list(range(start_attempt, MAX_RETRIES))
-
-    if not attempts_to_try:
-        return None
-
-    if args.server and hasattr(args, "api_key"):
-        api_key = args.api_key
-    else:
-        api_key = None
-
-    async def single_attempt(attempt_num: int) -> PageResult | None:
-        """Try one temperature variation. Returns PageResult or None on failure."""
-        temp_idx = min(attempt_num, len(TEMPERATURE_BY_ATTEMPT) - 1)
-        temperature = TEMPERATURE_BY_ATTEMPT[temp_idx]
-
-        try:
-            query = await build_page_query(
-                pdf_local_path,
-                page_num,
-                args.target_longest_image_dim,
-                image_rotation=cumulative_rotation,
-                model_name=args.model,
-            )
-            query["temperature"] = temperature
-
-            if args.guided_decoding:
-                query["guided_regex"] = (
-                    r"---\nprimary_language: (?:[a-z]{2}|null)\nis_rotation_valid: (?:True|False|true|false)\nrotation_correction: (?:0|90|180|270)\nis_table: (?:True|False|true|false)\nis_diagram: (?:True|False|true|false)\n(?:---|---\n[\s\S]+)"
-                )
-
-            async with max_concurrent_requests_limit:
-                status_code, response_body = await apost(COMPLETION_URL, json_data=query, api_key=api_key)
-
-            if status_code != 200:
-                return None
-
-            base_response_data = json.loads(response_body)
-
-            if base_response_data["usage"]["total_tokens"] > MODEL_MAX_CONTEXT:
-                return None
-
-            if base_response_data["choices"][0]["finish_reason"] != "stop":
-                return None
-
-            metrics.add_metrics(
-                server_input_tokens=base_response_data["usage"].get("prompt_tokens", 0),
-                server_output_tokens=base_response_data["usage"].get("completion_tokens", 0),
-            )
-
-            model_response_markdown = base_response_data["choices"][0]["message"]["content"]
-            parser = FrontMatterParser(front_matter_class=PageResponse)
-            front_matter, text = parser._extract_front_matter_and_text(model_response_markdown)
-            page_response = parser._parse_front_matter(front_matter, text)
-
-            return PageResult(
-                pdf_orig_path,
-                page_num,
-                page_response,
-                input_tokens=base_response_data["usage"].get("prompt_tokens", 0),
-                output_tokens=base_response_data["usage"].get("completion_tokens", 0),
-                is_fallback=False,
-            )
-        except asyncio.CancelledError:
-            raise  # Re-raise cancellation
-        except Exception:
-            return None
-
-    if parallel:
-        logger.info(f"Queue empty, firing {len(attempts_to_try)} parallel retries for {pdf_orig_path}-{page_num}")
-        tasks = [asyncio.create_task(single_attempt(a)) for a in attempts_to_try]
-
-        for coro in asyncio.as_completed(tasks):
-            try:
-                result = await coro
-                # In parallel mode, only accept rotation-valid results
-                # (can't handle rotation feedback without sequential processing)
-                if result is not None and result.response.is_rotation_valid:
-                    for t in tasks:
-                        t.cancel()
-                    return result
-            except asyncio.CancelledError:
-                continue
-
-        return None  # All failed or only got rotation-invalid results
-    else:
-        # Sequential mode - return first result (caller handles rotation)
-        for a in attempts_to_try:
-            result = await single_attempt(a)
-            if result is not None:
-                return result
-        return None
-
-
-async def process_page(args, worker_id: int, pdf_orig_path: str, pdf_local_path: str, page_num: int) -> PageResult:
-    """
-    Process a single page. Handles rotation issues sequentially (needs model feedback),
-    but delegates all other retries to execute_retries (parallel if queue empty, sequential otherwise).
-    """
-    MAX_RETRIES = args.max_page_retries
-    cumulative_rotation = 0
-    attempt = 0
-
-    await tracker.track_work(worker_id, f"{pdf_orig_path}-{page_num}", "started")
-
-    while attempt < MAX_RETRIES:
-        # Try single attempt via execute_retries (it handles the actual request)
-        result = await execute_retries(
-            args, pdf_orig_path, pdf_local_path, page_num,
-            start_attempt=attempt,
-            cumulative_rotation=cumulative_rotation,
-            parallel=False,  # Single attempt
-        )
-
-        if result is not None:
-            if result.response.is_rotation_valid:
-                # Success
-                metrics.add_metrics(**{"completed_pages": 1, f"finished_on_attempt_{attempt}": 1})
-                await tracker.track_work(worker_id, f"{pdf_orig_path}-{page_num}", "finished")
-                return result
-            else:
-                # Rotation issue - need sequential retry with model's correction
-                logger.info(
-                    f"Got invalid rotation for {pdf_orig_path}-{page_num} attempt {attempt}, "
-                    f"retrying with {result.response.rotation_correction} rotation"
-                )
-                cumulative_rotation = (cumulative_rotation + result.response.rotation_correction) % 360
-                attempt += 1
-                continue
-
-        # Result is None - attempt failed, decide how to proceed
-        if attempt < MAX_RETRIES - 1:
-            # Check if we should parallelize remaining attempts
-            parallel = (vllm_queued_requests == 0)
-            if parallel:
-                logger.info(f"Queue empty, firing {MAX_RETRIES - attempt - 1} parallel retries for {pdf_orig_path}-{page_num}")
-
-            result = await execute_retries(
-                args, pdf_orig_path, pdf_local_path, page_num,
-                start_attempt=attempt + 1,
-                cumulative_rotation=cumulative_rotation,
-                parallel=parallel,
-            )
-
-            if result is not None and result.response.is_rotation_valid:
-                metrics.add_metrics(**{"completed_pages": 1, f"finished_on_attempt_{attempt + 1}": 1})
-                await tracker.track_work(worker_id, f"{pdf_orig_path}-{page_num}", "finished")
-                return result
-
-        # All retries exhausted
-        break
-
-    logger.error(f"Failed to process {pdf_orig_path}-{page_num} after {MAX_RETRIES} attempts.")
-    metrics.add_metrics(failed_pages=1)
-    await tracker.track_work(worker_id, f"{pdf_orig_path}-{page_num}", "errored")
-
-    # Fallback to pdftotext
-    return PageResult(
-        pdf_orig_path,
-        page_num,
-        PageResponse(
-            natural_text=get_anchor_text(pdf_local_path, page_num, pdf_engine="pdftotext"),
-            primary_language=None,
-            is_rotation_valid=True,
-            rotation_correction=0,
-            is_table=False,
-            is_diagram=False,
-        ),
-        input_tokens=0,
-        output_tokens=0,
-        is_fallback=True,
-    )
 
 
 def is_tarball_path(path: str) -> bool:
@@ -653,6 +591,49 @@ def build_dolma_document(pdf_orig_path, page_results):
         },
     }
     return dolma_doc
+
+def get_markdown_path(workspace: str, source_file: str) -> str:
+    """
+    Calculate the markdown output path for a given source file.
+
+    Args:
+        workspace: The workspace directory path
+        source_file: The original source file path (can be S3, local, or tarball::internal_path)
+
+    Returns:
+        The full path where the markdown file should be written
+    """
+    # Handle tarball paths (format: tarball_path::internal_path)
+    if "::" in source_file:
+        tarball_path, internal_path = source_file.split("::", 1)
+        # Use tarball basename + internal path structure
+        tarball_basename = os.path.splitext(os.path.basename(tarball_path))[0]
+        if tarball_basename.endswith(".tar"):
+            tarball_basename = tarball_basename[:-4]
+        relative_path = os.path.join(tarball_basename, internal_path)
+    elif source_file.startswith("s3://"):
+        # Extract the path after the bucket name for S3 sources
+        parsed = urlparse(source_file)
+        relative_path = parsed.path.lstrip("/")
+    else:
+        # For local files, strip leading slash to make it relative
+        relative_path = source_file.lstrip("/")
+
+    # Sanitize path: remove any .. components to prevent path traversal
+    parts = relative_path.split("/")
+    safe_parts = [p for p in parts if p and p != ".."]
+    relative_path = "/".join(safe_parts)
+
+    # Change the extension to .md
+    md_filename = os.path.splitext(os.path.basename(relative_path))[0] + ".md"
+    # Get the directory path without the filename
+    dir_path = os.path.dirname(relative_path)
+
+    # Create the output markdown path
+    markdown_dir = os.path.join(workspace, "markdown", dir_path)
+    markdown_path = os.path.join(markdown_dir, md_filename)
+
+    return markdown_path
 
 
 async def worker(args, work_queue: WorkQueue, worker_id):
