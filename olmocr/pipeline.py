@@ -15,7 +15,7 @@ import ssl
 import sys
 import tarfile
 import tempfile
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import cache
 from io import BytesIO
@@ -996,132 +996,98 @@ def submit_beaker_job(args):
 
 def print_stats(args, root_work_queue):
     LONG_CONTEXT_THRESHOLD = 32768
-
     assert args.workspace.startswith("s3://"), "Printing stats functionality only works with s3 workspaces for now."
 
-    # Get total work items and completed items
-    index_file_s3_path = os.path.join(args.workspace, "work_index_list.csv.zstd")
-    output_glob = os.path.join(args.workspace, "results", "*.jsonl")
+    done_work_items = expand_s3_glob(workspace_s3, os.path.join(args.workspace, "results", "*.jsonl"))
+    work_queue_lines = download_zstd_csv(workspace_s3, os.path.join(args.workspace, "work_index_list.csv.zstd"))
+    work_queue = {parts[0]: parts[1:] for line in work_queue_lines if line.strip() and (parts := root_work_queue._decode_csv_row(line.strip()))}
 
-    done_work_items = expand_s3_glob(workspace_s3, output_glob)
-    work_queue_lines = download_zstd_csv(workspace_s3, index_file_s3_path)
-
-    work_queue = {}
-    for line in work_queue_lines:
-        if line.strip():
-            parts = root_work_queue._decode_csv_row(line.strip())
-            if parts:  # Ensure we have at least one part
-                work_queue[parts[0]] = parts[1:]
-
-    total_items = len(work_queue)
-    completed_items = len(done_work_items)
+    total_items, completed_items = len(work_queue), len(done_work_items)
 
     def process_output_file(s3_path):
         try:
-            data = get_s3_bytes(workspace_s3, s3_path)
-            doc_count = 0
-            total_input_tokens = 0
-            total_output_tokens = 0
-            total_pages = 0
-            total_fallback_pages = 0
-            processed_paths = set()
-
-            # Counters for long context docs within a single file
-            long_context_docs = 0
-            long_context_tokens = 0
-
-            for line in data.decode("utf-8").splitlines():
-                if line.strip():
-                    doc = json.loads(line)
-                    doc_count += 1
-                    doc_input_tokens = doc["metadata"].get("total-input-tokens", 0)
-                    doc_output_tokens = doc["metadata"].get("total-output-tokens", 0)
-                    doc_pages = doc["metadata"].get("pdf-total-pages", 0)
-                    doc_fallback_pages = doc["metadata"].get("total-fallback-pages", 0)
-
-                    total_input_tokens += doc_input_tokens
-                    total_output_tokens += doc_output_tokens
-                    total_pages += doc_pages
-                    total_fallback_pages += doc_fallback_pages
-                    processed_paths.add(doc["metadata"]["Source-File"])
-
-                    # Check if this doc exceeds the long context threshold
-                    if doc_output_tokens > LONG_CONTEXT_THRESHOLD:
-                        long_context_docs += 1
-                        long_context_tokens += doc_output_tokens
-
-            return (
-                doc_count,
-                total_input_tokens,
-                total_output_tokens,
-                total_pages,
-                total_fallback_pages,
-                processed_paths,
-                long_context_docs,
-                long_context_tokens,
-            )
+            stats = {
+                "docs": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "pages": 0,
+                "fallback_pages": 0,
+                "long_docs": 0,
+                "long_tokens": 0,
+                "en_docs": 0,
+                "en_tokens": 0,
+            }
+            paths = set()
+            for line in get_s3_bytes(workspace_s3, s3_path).decode("utf-8").splitlines():
+                if not line.strip():
+                    continue
+                doc = json.loads(line)
+                meta, attrs = doc["metadata"], doc.get("attributes", {})
+                out_tokens = meta.get("total-output-tokens", 0)
+                stats["docs"] += 1
+                stats["input_tokens"] += meta.get("total-input-tokens", 0)
+                stats["output_tokens"] += out_tokens
+                stats["pages"] += meta.get("pdf-total-pages", 0)
+                stats["fallback_pages"] += meta.get("total-fallback-pages", 0)
+                paths.add(meta["Source-File"])
+                if out_tokens > LONG_CONTEXT_THRESHOLD:
+                    stats["long_docs"] += 1
+                    stats["long_tokens"] += out_tokens
+                langs = attrs.get("primary_language", [])
+                if langs and sum(1 for ln in langs if ln == "en") > len(langs) / 2:
+                    stats["en_docs"] += 1
+                    stats["en_tokens"] += out_tokens
+            return stats, paths
         except Exception as e:
             logger.warning(f"Error processing {s3_path}: {e}")
-            return 0, 0, 0, 0, 0, set(), 0, 0
+            return {
+                k: 0 for k in ["docs", "input_tokens", "output_tokens", "pages", "fallback_pages", "long_docs", "long_tokens", "en_docs", "en_tokens"]
+            }, set()
 
     print(f"\nCompleted work items {completed_items:,} out of {total_items:,}: {completed_items/total_items*100:.2f}%")
     print("\nProcessing output files...")
-    docs_total = 0
-    input_tokens_total = 0
-    output_tokens_total = 0
-    pages_total = 0
-    fallback_pages_total = 0
-    all_processed_paths = set()
-    original_paths = set()
 
-    # Counters for long context documents across all files
-    long_context_docs_count = 0
-    long_context_tokens_total = 0
+    totals = {"docs": 0, "input_tokens": 0, "output_tokens": 0, "pages": 0, "fallback_pages": 0, "long_docs": 0, "long_tokens": 0, "en_docs": 0, "en_tokens": 0}
+    all_processed, original_paths = set(), set()
 
-    # First collect all original PDF paths
-    for done_work_item in done_work_items:
-        if match := re.search(r"output_(\w+).jsonl", done_work_item):
-            done_work_hash = match.group(1)
-            if done_work_hash in work_queue:
-                original_paths.update(work_queue[done_work_hash])
+    for item in done_work_items:
+        if (match := re.search(r"output_(\w+).jsonl", item)) and match.group(1) in work_queue:
+            original_paths.update(work_queue[match.group(1)])
 
     with ThreadPoolExecutor() as executor:
-        futures = {executor.submit(process_output_file, item): item for item in done_work_items}
+        for stats, paths in tqdm(executor.map(process_output_file, done_work_items), total=len(done_work_items)):
+            for k in totals:
+                totals[k] += stats[k]
+            all_processed.update(paths)
 
-        for future in tqdm(as_completed(futures), total=len(futures)):
-            (doc_count, input_tokens, output_tokens, pages, fallback_pages, processed_paths, long_context_docs, long_context_tokens) = future.result()
-            docs_total += doc_count
-            input_tokens_total += input_tokens
-            output_tokens_total += output_tokens
-            pages_total += pages
-            fallback_pages_total += fallback_pages
-            all_processed_paths.update(processed_paths)
-            long_context_docs_count += long_context_docs
-            long_context_tokens_total += long_context_tokens
+    d, p, o, c = totals["docs"], totals["pages"], totals["output_tokens"], max(1, completed_items)
+    print(
+        f"""
+Work Items Status:
+Total work items: {total_items:,}
+Completed items: {completed_items:,}
+Remaining items: {total_items - completed_items:,}
 
-    skipped_paths = original_paths - all_processed_paths
+Results:
+Total documents processed: {d:,}
+Total documents skipped: {len(original_paths - all_processed):,}
+Total pages on fallback: {totals['fallback_pages']:,}
+Total pages processed: {p:,}
 
-    print("\nWork Items Status:")
-    print(f"Total work items: {total_items:,}")
-    print(f"Completed items: {completed_items:,}")
-    print(f"Remaining items: {total_items - completed_items:,}")
+Total output tokens: {o:,}
+Projected output tokens: {round(o / c * total_items):,}
 
-    print("\nResults:")
-    print(f"Total documents processed: {docs_total:,}")
-    print(f"Total documents skipped: {len(skipped_paths):,}")
-    print(f"Total pages on fallback: {fallback_pages_total:,}")
-    print(f"Total pages processed: {pages_total:,}")
+Average pages per doc: {p / max(1, d):,.1f}
+Average output tokens per doc: {o / max(1, d):,.1f}
+Average output tokens per page: {o / max(1, p):,.1f}
 
-    print(f"\nTotal output tokens: {output_tokens_total:,}")
-    print(f"Projected output tokens: {round((output_tokens_total/max(1, completed_items))*total_items):,}")
+Long Context Documents (>{LONG_CONTEXT_THRESHOLD} tokens): {totals['long_docs']:,}
+Total tokens in long context documents: {totals['long_tokens']:,}
 
-    print(f"\nAverage pages per doc: {pages_total/max(1,docs_total):,.1f}")
-    print(f"Average output tokens per doc: {output_tokens_total/max(1,docs_total):,.1f}")
-    print(f"Average output tokens per page: {output_tokens_total/max(1,pages_total):,.1f}")
-
-    # Print long context documents stats
-    print(f"\nLong Context Documents (>{LONG_CONTEXT_THRESHOLD} tokens): {long_context_docs_count:,}")
-    print(f"Total tokens in long context documents: {long_context_tokens_total:,}")
+English-only documents (>50% pages with 'en'): {totals['en_docs']:,}
+Total output tokens in English-only documents: {totals['en_tokens']:,}
+Projected English-only output tokens: {round(totals['en_tokens'] / c * total_items):,}"""
+    )
 
 
 async def main():
