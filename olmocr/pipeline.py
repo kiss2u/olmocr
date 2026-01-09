@@ -78,6 +78,12 @@ pdf_s3 = boto3.client("s3")
 metrics = MetricsKeeper(window=60 * 5)
 tracker = WorkerTracker()
 
+# Global variable for vLLM queue status (updated by vllm_server_task)
+vllm_queued_requests = 0
+
+# Temperature values for retry attempts - higher temperature helps overcome repetition issues
+TEMPERATURE_BY_ATTEMPT = [0.1, 0.1, 0.2, 0.3, 0.5, 0.8, 0.9, 1.0]
+
 pdf_render_max_workers_limit = asyncio.BoundedSemaphore(int(float(os.environ.get("BEAKER_ASSIGNED_CPU_COUNT", max(1, multiprocessing.cpu_count() - 2)))))
 max_concurrent_requests_limit = asyncio.BoundedSemaphore(1)  # Actual value set by args in main()
 
@@ -284,63 +290,67 @@ async def apost(url, json_data, api_key=None):
                 pass
 
 
-async def process_page(args, worker_id: int, pdf_orig_path: str, pdf_local_path: str, page_num: int) -> PageResult:
+async def execute_retries(
+    args,
+    pdf_orig_path: str,
+    pdf_local_path: str,
+    page_num: int,
+    start_attempt: int,
+    cumulative_rotation: int,
+    parallel: bool,
+) -> PageResult | None:
+    """
+    Execute remaining retry attempts for a page.
+    If parallel=True, fire all at once and return first valid result.
+    If parallel=False, try one at a time sequentially.
+    Returns PageResult on success, None if all attempts fail.
+    """
     COMPLETION_URL = f"{args.server.rstrip('/')}/chat/completions"
     MAX_RETRIES = args.max_page_retries
     MODEL_MAX_CONTEXT = 16384
-    TEMPERATURE_BY_ATTEMPT = [0.1, 0.1, 0.2, 0.3, 0.5, 0.8, 0.9, 1.0]
-    exponential_backoffs = 0
-    cumulative_rotation = 0  # Track cumulative rotation instead of local
-    attempt = 0
-    await tracker.track_work(worker_id, f"{pdf_orig_path}-{page_num}", "started")
+    attempts_to_try = list(range(start_attempt, MAX_RETRIES))
 
-    while attempt < MAX_RETRIES:
-        lookup_attempt = min(attempt, len(TEMPERATURE_BY_ATTEMPT) - 1)
+    if not attempts_to_try:
+        return None
 
-        query = await build_page_query(
-            pdf_local_path,
-            page_num,
-            args.target_longest_image_dim,
-            image_rotation=cumulative_rotation,
-            model_name=args.model,
-        )
-        # Change temperature as number of attempts increases to overcome repetition issues at expense of quality
-        query["temperature"] = TEMPERATURE_BY_ATTEMPT[lookup_attempt]
+    if args.server and hasattr(args, "api_key"):
+        api_key = args.api_key
+    else:
+        api_key = None
 
-        # Enable guided decoding regex if needed
-        if args.guided_decoding:
-            query["guided_regex"] = (
-                r"---\nprimary_language: (?:[a-z]{2}|null)\nis_rotation_valid: (?:True|False|true|false)\nrotation_correction: (?:0|90|180|270)\nis_table: (?:True|False|true|false)\nis_diagram: (?:True|False|true|false)\n(?:---|---\n[\s\S]+)"
-            )
-
-        logger.debug(f"Built page query for {pdf_orig_path}-{page_num}")
+    async def single_attempt(attempt_num: int) -> PageResult | None:
+        """Try one temperature variation. Returns PageResult or None on failure."""
+        temp_idx = min(attempt_num, len(TEMPERATURE_BY_ATTEMPT) - 1)
+        temperature = TEMPERATURE_BY_ATTEMPT[temp_idx]
 
         try:
-            # Passing API key only for external servers that need authentication
-            if args.server and hasattr(args, "api_key"):
-                api_key = args.api_key
-            else:
-                api_key = None
+            query = await build_page_query(
+                pdf_local_path,
+                page_num,
+                args.target_longest_image_dim,
+                image_rotation=cumulative_rotation,
+                model_name=args.model,
+            )
+            query["temperature"] = temperature
+
+            if args.guided_decoding:
+                query["guided_regex"] = (
+                    r"---\nprimary_language: (?:[a-z]{2}|null)\nis_rotation_valid: (?:True|False|true|false)\nrotation_correction: (?:0|90|180|270)\nis_table: (?:True|False|true|false)\nis_diagram: (?:True|False|true|false)\n(?:---|---\n[\s\S]+)"
+                )
 
             async with max_concurrent_requests_limit:
                 status_code, response_body = await apost(COMPLETION_URL, json_data=query, api_key=api_key)
 
-            if status_code == 400:
-                raise ValueError(f"Got BadRequestError from server: {response_body}, skipping this response")
-            elif status_code == 429:
-                raise ConnectionError(f"Too many requests, doing exponential backoff")
-            elif status_code == 500:
-                raise ValueError(f"Got InternalServerError from server: {response_body}, skipping this response")
-            elif status_code != 200:
-                raise ValueError(f"Error http status {status_code}")
+            if status_code != 200:
+                return None
 
             base_response_data = json.loads(response_body)
 
             if base_response_data["usage"]["total_tokens"] > MODEL_MAX_CONTEXT:
-                raise ValueError(f"Response exceeded model_max_context of {MODEL_MAX_CONTEXT}, cannot use this response")
+                return None
 
             if base_response_data["choices"][0]["finish_reason"] != "stop":
-                raise ValueError("Response did not finish with reason code 'stop', cannot use this response")
+                return None
 
             metrics.add_metrics(
                 server_input_tokens=base_response_data["usage"].get("prompt_tokens", 0),
@@ -348,22 +358,10 @@ async def process_page(args, worker_id: int, pdf_orig_path: str, pdf_local_path:
             )
 
             model_response_markdown = base_response_data["choices"][0]["message"]["content"]
-
             parser = FrontMatterParser(front_matter_class=PageResponse)
             front_matter, text = parser._extract_front_matter_and_text(model_response_markdown)
             page_response = parser._parse_front_matter(front_matter, text)
 
-            if not page_response.is_rotation_valid and attempt < MAX_RETRIES - 1:
-                logger.info(
-                    f"Got invalid_page rotation for {pdf_orig_path}-{page_num} attempt {attempt}, retrying with {page_response.rotation_correction} rotation"
-                )
-                # Add the rotation correction to the cumulative rotation
-                cumulative_rotation = (cumulative_rotation + page_response.rotation_correction) % 360
-                logger.info(f"Cumulative rotation is now {cumulative_rotation} degrees")
-                raise ValueError(f"invalid_page rotation for {pdf_orig_path}-{page_num}")
-
-            metrics.add_metrics(**{"completed_pages": 1, f"finished_on_attempt_{attempt}": 1})
-            await tracker.track_work(worker_id, f"{pdf_orig_path}-{page_num}", "finished")
             return PageResult(
                 pdf_orig_path,
                 page_num,
@@ -372,35 +370,100 @@ async def process_page(args, worker_id: int, pdf_orig_path: str, pdf_local_path:
                 output_tokens=base_response_data["usage"].get("completion_tokens", 0),
                 is_fallback=False,
             )
-        except (ConnectionError, OSError, asyncio.TimeoutError) as e:
-            logger.warning(f"Client error on attempt {attempt} for {pdf_orig_path}-{page_num}: {type(e)} {e}")
-
-            # Now we want to do exponential backoff, and not count this as an actual page retry
-            # Page retrys are supposed to be for fixing bad results from the model, but actual requests to vllm
-            # are supposed to work. Probably this means that the server is just restarting
-            sleep_delay = 10 * (2**exponential_backoffs)
-            exponential_backoffs += 1
-            logger.info(f"Sleeping for {sleep_delay} seconds on {pdf_orig_path}-{page_num} to allow server restart")
-            await asyncio.sleep(sleep_delay)
         except asyncio.CancelledError:
-            logger.info(f"Process page {pdf_orig_path}-{page_num} cancelled")
-            await tracker.track_work(worker_id, f"{pdf_orig_path}-{page_num}", "cancelled")
-            raise
-        except json.JSONDecodeError as e:
-            logger.warning(f"JSON decode error on attempt {attempt} for {pdf_orig_path}-{page_num}: {e}")
-            attempt += 1
-        except ValueError as e:
-            logger.warning(f"ValueError on attempt {attempt} for {pdf_orig_path}-{page_num}: {type(e)} - {e}")
-            attempt += 1
-        except Exception as e:
-            logger.exception(f"Unexpected error on attempt {attempt} for {pdf_orig_path}-{page_num}: {type(e)} - {e}")
-            attempt += 1
+            raise  # Re-raise cancellation
+        except Exception:
+            return None
+
+    if parallel:
+        logger.info(f"Queue empty, firing {len(attempts_to_try)} parallel retries for {pdf_orig_path}-{page_num}")
+        tasks = [asyncio.create_task(single_attempt(a)) for a in attempts_to_try]
+
+        for coro in asyncio.as_completed(tasks):
+            try:
+                result = await coro
+                # In parallel mode, only accept rotation-valid results
+                # (can't handle rotation feedback without sequential processing)
+                if result is not None and result.response.is_rotation_valid:
+                    for t in tasks:
+                        t.cancel()
+                    return result
+            except asyncio.CancelledError:
+                continue
+
+        return None  # All failed or only got rotation-invalid results
+    else:
+        # Sequential mode - return first result (caller handles rotation)
+        for a in attempts_to_try:
+            result = await single_attempt(a)
+            if result is not None:
+                return result
+        return None
+
+
+async def process_page(args, worker_id: int, pdf_orig_path: str, pdf_local_path: str, page_num: int) -> PageResult:
+    """
+    Process a single page. Handles rotation issues sequentially (needs model feedback),
+    but delegates all other retries to execute_retries (parallel if queue empty, sequential otherwise).
+    """
+    MAX_RETRIES = args.max_page_retries
+    cumulative_rotation = 0
+    attempt = 0
+
+    await tracker.track_work(worker_id, f"{pdf_orig_path}-{page_num}", "started")
+
+    while attempt < MAX_RETRIES:
+        # Try single attempt via execute_retries (it handles the actual request)
+        result = await execute_retries(
+            args, pdf_orig_path, pdf_local_path, page_num,
+            start_attempt=attempt,
+            cumulative_rotation=cumulative_rotation,
+            parallel=False,  # Single attempt
+        )
+
+        if result is not None:
+            if result.response.is_rotation_valid:
+                # Success
+                metrics.add_metrics(**{"completed_pages": 1, f"finished_on_attempt_{attempt}": 1})
+                await tracker.track_work(worker_id, f"{pdf_orig_path}-{page_num}", "finished")
+                return result
+            else:
+                # Rotation issue - need sequential retry with model's correction
+                logger.info(
+                    f"Got invalid rotation for {pdf_orig_path}-{page_num} attempt {attempt}, "
+                    f"retrying with {result.response.rotation_correction} rotation"
+                )
+                cumulative_rotation = (cumulative_rotation + result.response.rotation_correction) % 360
+                attempt += 1
+                continue
+
+        # Result is None - attempt failed, decide how to proceed
+        if attempt < MAX_RETRIES - 1:
+            # Check if we should parallelize remaining attempts
+            parallel = (vllm_queued_requests == 0)
+            if parallel:
+                logger.info(f"Queue empty, firing {MAX_RETRIES - attempt - 1} parallel retries for {pdf_orig_path}-{page_num}")
+
+            result = await execute_retries(
+                args, pdf_orig_path, pdf_local_path, page_num,
+                start_attempt=attempt + 1,
+                cumulative_rotation=cumulative_rotation,
+                parallel=parallel,
+            )
+
+            if result is not None and result.response.is_rotation_valid:
+                metrics.add_metrics(**{"completed_pages": 1, f"finished_on_attempt_{attempt + 1}": 1})
+                await tracker.track_work(worker_id, f"{pdf_orig_path}-{page_num}", "finished")
+                return result
+
+        # All retries exhausted
+        break
 
     logger.error(f"Failed to process {pdf_orig_path}-{page_num} after {MAX_RETRIES} attempts.")
     metrics.add_metrics(failed_pages=1)
     await tracker.track_work(worker_id, f"{pdf_orig_path}-{page_num}", "errored")
 
-    # This returns the fallback case, using pdftotext
+    # Fallback to pdftotext
     return PageResult(
         pdf_orig_path,
         page_num,
@@ -771,7 +834,9 @@ async def vllm_server_task(model_name_or_path, args, unknown_args=None):
             last_running_req = current_running
 
         if match := re.search(r"(?:Waiting|Pending):\s*(\d+)", line):
+            global vllm_queued_requests
             last_queue_req = int(match.group(1))
+            vllm_queued_requests = last_queue_req
             logger.info(f"vllm running req: {last_running_req} queue req: {last_queue_req}")
 
     async def read_stream(stream):
