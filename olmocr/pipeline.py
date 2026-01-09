@@ -275,6 +275,13 @@ async def process_page(args, worker_id: int, pdf_orig_path: str, pdf_local_path:
             if result is not None:  # Another rotation correction needed
                 cumulative_rotation = (cumulative_rotation + result.response.rotation_correction) % 360
 
+        # If you tried many times and all rotations were invalid, but you at least had a valid response, then return that in the end
+        if result is not None:
+            metrics.add_metrics(**{"completed_pages": 1, f"finished_on_attempt_{MAX_RETRIES}": 1})
+            await tracker.track_work(worker_id, f"{pdf_orig_path}-{page_num}", "finished")
+            return result
+
+        # Otherwise you can do a full fallback
         logger.error(f"Failed {pdf_orig_path}-{page_num} after {MAX_RETRIES} rotation retries")
         metrics.add_metrics(failed_pages=1)
         await tracker.track_work(worker_id, f"{pdf_orig_path}-{page_num}", "errored")
@@ -310,6 +317,12 @@ async def process_page(args, worker_id: int, pdf_orig_path: str, pdf_local_path:
                 except asyncio.CancelledError:
                     continue
             break  # Parallel attempts exhausted
+
+    # If you tried many times and all rotations were invalid, but you at least had a valid response, then return that in the end
+    if result is not None:
+        metrics.add_metrics(**{"completed_pages": 1, f"finished_on_attempt_{MAX_RETRIES}": 1})
+        await tracker.track_work(worker_id, f"{pdf_orig_path}-{page_num}", "finished")
+        return result
 
     # All retries exhausted
     logger.error(f"Failed {pdf_orig_path}-{page_num} after {MAX_RETRIES} attempts")
