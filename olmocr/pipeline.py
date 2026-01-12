@@ -308,7 +308,9 @@ async def process_page(args, worker_id: int, pdf_orig_path: str, pdf_local_path:
         remaining_attempts = retry_attempts[i + 1 :]
         if remaining_attempts and vllm_queued_requests == 0:
             logger.info(f"Queue empty, firing {len(remaining_attempts)} parallel retries for {pdf_orig_path}-{page_num}")
-            tasks = [asyncio.create_task(try_single_page(args, pdf_orig_path, pdf_local_path, page_num, a, rotation=0)) for a in remaining_attempts]
+            tasks = [
+                asyncio.create_task(try_single_page(args, pdf_orig_path, pdf_local_path, page_num, a, rotation=cumulative_rotation)) for a in remaining_attempts
+            ]
 
             for coro in asyncio.as_completed(tasks):
                 try:
@@ -323,7 +325,7 @@ async def process_page(args, worker_id: int, pdf_orig_path: str, pdf_local_path:
                     continue
             break  # Parallel attempts exhausted
 
-    # If you tried many times and all rotations were invalid, but you at least had a valid response, then return that in the end
+    # If you tried many times and a least had a valid response, then return that in the end
     if result is not None and result.is_valid:
         metrics.add_metrics(**{"completed_pages": 1, f"finished_on_attempt_{MAX_RETRIES}": 1})
         await tracker.track_work(worker_id, f"{pdf_orig_path}-{page_num}", "finished")
