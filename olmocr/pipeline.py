@@ -185,6 +185,9 @@ async def try_single_page(
             status_code, response_body = await apost(COMPLETION_URL, json_data=query, api_key=api_key)
 
         if status_code != 200:
+            logger.warning(
+                f"Server returned {status_code} for {pdf_orig_path}-{page_num} attempt {attempt}: {response_body[:500] if response_body else 'empty response'}"
+            )
             return None
 
         base_response_data = json.loads(response_body)
@@ -218,7 +221,11 @@ async def try_single_page(
         )
     except asyncio.CancelledError:
         raise
-    except Exception:
+    except (ConnectionError, OSError, asyncio.TimeoutError):
+        # Re-raise connection errors so caller can apply exponential backoff
+        raise
+    except Exception as e:
+        logger.warning(f"try_single_page failed for {pdf_orig_path}-{page_num} attempt {attempt}: {type(e).__name__}: {e}")
         return None
 
 
@@ -242,6 +249,34 @@ def make_fallback_result(pdf_orig_path: str, pdf_local_path: str, page_num: int)
     )
 
 
+async def try_single_page_with_backoff(
+    args,
+    pdf_orig_path: str,
+    pdf_local_path: str,
+    page_num: int,
+    attempt: int,
+    rotation: int,
+) -> PageResult | None:
+    """
+    Wrapper around try_single_page that handles connection errors with exponential backoff.
+    """
+    MAX_BACKOFF_ATTEMPTS = 10
+
+    for backoff_count in range(MAX_BACKOFF_ATTEMPTS):
+        try:
+            return await try_single_page(args, pdf_orig_path, pdf_local_path, page_num, attempt, rotation)
+        except (ConnectionError, OSError, asyncio.TimeoutError) as e:
+            sleep_delay = 10 * (2**backoff_count)
+            logger.warning(
+                f"Connection error on {pdf_orig_path}-{page_num} attempt {attempt}: {type(e).__name__}: {e}. "
+                f"Backoff {backoff_count + 1}/{MAX_BACKOFF_ATTEMPTS}, sleeping {sleep_delay}s"
+            )
+            await asyncio.sleep(sleep_delay)
+
+    logger.error(f"Max backoff attempts reached for {pdf_orig_path}-{page_num}")
+    return None
+
+
 async def process_page(args, worker_id: int, pdf_orig_path: str, pdf_local_path: str, page_num: int) -> PageResult:
     """
     Process a single page with retry logic:
@@ -257,7 +292,7 @@ async def process_page(args, worker_id: int, pdf_orig_path: str, pdf_local_path:
     await tracker.track_work(worker_id, f"{pdf_orig_path}-{page_num}", "started")
 
     # === First attempt ===
-    result = await try_single_page(args, pdf_orig_path, pdf_local_path, page_num, attempt=0, rotation=cumulative_rotation)
+    result = await try_single_page_with_backoff(args, pdf_orig_path, pdf_local_path, page_num, attempt=0, rotation=cumulative_rotation)
 
     if result is not None and not result.response.is_rotation_valid:
         cumulative_rotation = result.response.rotation_correction % 360
@@ -273,7 +308,7 @@ async def process_page(args, worker_id: int, pdf_orig_path: str, pdf_local_path:
         logger.info(f"Rotation error for {pdf_orig_path}-{page_num}, retrying sequentially with rotation={cumulative_rotation}")
 
         for attempt in retry_attempts:
-            result = await try_single_page(args, pdf_orig_path, pdf_local_path, page_num, attempt, cumulative_rotation)
+            result = await try_single_page_with_backoff(args, pdf_orig_path, pdf_local_path, page_num, attempt, cumulative_rotation)
 
             if result is not None and result.is_valid and result.response.is_rotation_valid:
                 metrics.add_metrics(**{"completed_pages": 1, f"finished_on_attempt_{attempt}": 1})
@@ -297,7 +332,7 @@ async def process_page(args, worker_id: int, pdf_orig_path: str, pdf_local_path:
 
     # === Non-rotation error path: sequential, but switch to parallel if queue empties ===
     for i, attempt in enumerate(retry_attempts):
-        result = await try_single_page(args, pdf_orig_path, pdf_local_path, page_num, attempt, rotation=cumulative_rotation)
+        result = await try_single_page_with_backoff(args, pdf_orig_path, pdf_local_path, page_num, attempt, rotation=cumulative_rotation)
 
         if result is not None and result.is_valid and result.response.is_rotation_valid:
             metrics.add_metrics(**{"completed_pages": 1, f"finished_on_attempt_{attempt}": 1})
@@ -309,7 +344,8 @@ async def process_page(args, worker_id: int, pdf_orig_path: str, pdf_local_path:
         if remaining_attempts and vllm_queued_requests == 0:
             logger.info(f"Queue empty, firing {len(remaining_attempts)} parallel retries for {pdf_orig_path}-{page_num}")
             tasks = [
-                asyncio.create_task(try_single_page(args, pdf_orig_path, pdf_local_path, page_num, a, rotation=cumulative_rotation)) for a in remaining_attempts
+                asyncio.create_task(try_single_page_with_backoff(args, pdf_orig_path, pdf_local_path, page_num, a, rotation=cumulative_rotation))
+                for a in remaining_attempts
             ]
 
             for coro in asyncio.as_completed(tasks):
