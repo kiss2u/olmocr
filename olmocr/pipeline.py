@@ -273,8 +273,8 @@ async def try_single_page_with_backoff(
             )
             await asyncio.sleep(sleep_delay)
 
-    logger.error(f"Max backoff attempts reached for {pdf_orig_path}-{page_num}")
-    return None
+    logger.error(f"Max backoff attempts reached for {pdf_orig_path}-{page_num}, terminating job")
+    sys.exit(1)
 
 
 async def process_page(args, worker_id: int, pdf_orig_path: str, pdf_local_path: str, page_num: int) -> PageResult:
