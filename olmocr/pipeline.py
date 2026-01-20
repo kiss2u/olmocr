@@ -1165,8 +1165,7 @@ def print_stats(args, root_work_queue):
             all_processed.update(paths)
 
     d, p, o, c = totals["docs"], totals["pages"], totals["output_tokens"], max(1, completed_items)
-    print(
-        f"""
+    print(f"""
 Work Items Status:
 Total work items: {total_items:,}
 Completed items: {completed_items:,}
@@ -1190,8 +1189,7 @@ Total tokens in long context documents: {totals['long_tokens']:,}
 
 English-only documents (>50% pages with 'en'): {totals['en_docs']:,}
 Total output tokens in English-only documents: {totals['en_tokens']:,}
-Projected English-only output tokens: {round(totals['en_tokens'] / c * total_items):,}"""
-    )
+Projected English-only output tokens: {round(totals['en_tokens'] / c * total_items):,}""")
 
 
 async def main():
