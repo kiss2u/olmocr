@@ -581,7 +581,7 @@ async def server_task(model_name_or_path, args, semaphore):
         "16000",
         # "--hf_overrides",  "{\"architectures\": [\"Gemma3ForCausalLM\"]}",
         "--limit-mm-per-prompt",
-        "images=0",
+        '{"image":0, "video": 0}',  # Disabling video encoder saves RAM that you can put towards the KV cache, thanks @charitarthchugh
     ]
 
     proc = await asyncio.create_subprocess_exec(

@@ -412,6 +412,8 @@ async def server_task(model_name_or_path, args, semaphore):
         "--uvicorn-log-level",
         "warning",
         "--disable-log-requests",
+        "--limit-mm-per-prompt",
+        '{"image":0, "video": 0}',  # Disabling video encoder saves RAM that you can put towards the KV cache, thanks @charitarthchugh
     ]
 
     proc = await asyncio.create_subprocess_exec(
