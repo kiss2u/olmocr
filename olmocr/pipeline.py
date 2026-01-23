@@ -1081,7 +1081,11 @@ def submit_beaker_job(args):
                 ),
                 image=BeakerImageSource(beaker=beaker_image),
                 command=["python", "-m", "olmocr.pipeline"] + args_list,
-                env_vars=[BeakerEnvVar(name="BEAKER_JOB_NAME", value=task_name), BeakerEnvVar(name="OWNER", value=owner), BeakerEnvVar(name="HF_HUB_OFFLINE", value="1")]
+                env_vars=[
+                    BeakerEnvVar(name="BEAKER_JOB_NAME", value=task_name),
+                    BeakerEnvVar(name="OWNER", value=owner),
+                    BeakerEnvVar(name="HF_HUB_OFFLINE", value="1"),
+                ]
                 + env_var_secrets,
                 resources=BeakerTaskResources(gpu_count=1, memory="125GB"),  # Have to set a memory limit, otherwise VLLM may use too much on its own
                 constraints=BeakerConstraints(cluster=args.beaker_cluster if isinstance(args.beaker_cluster, list) else [args.beaker_cluster]),
