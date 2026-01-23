@@ -740,6 +740,7 @@ def submit_beaker_job(args):
     )
     from beaker.exceptions import BeakerSecretNotFound
 
+    Beaker.TIMEOUT = 60
     b = Beaker.from_env(default_workspace=args.beaker_workspace)
     owner = b.user_name
     beaker_image = f"jakep/olmocr-inference-{VERSION}"
