@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## [v0.4.22](https://github.com/allenai/olmocr/releases/tag/v0.4.22) - 2026-01-23
+
 ## [v0.4.21](https://github.com/allenai/olmocr/releases/tag/v0.4.21) - 2026-01-23
 
 ## [v0.4.20](https://github.com/allenai/olmocr/releases/tag/v0.4.20) - 2026-01-20
