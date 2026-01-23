@@ -71,8 +71,23 @@ metrics = MetricsKeeper(window=60 * 5)
 class PIIClassification(BaseModel):
     primary_language: str = Field(..., description="Primary language as a two-letter code")
     document_type: str = Field(..., description="Basic summary of document type classification")
-    is_resume_cv: Optional[bool] = Field(..., description="True if the document is a page from a resume or cv")
-    contains_pii: Optional[bool] = Field(..., description="True if document contains PII")
+    is_resume_cv: Optional[bool] = Field(None, description="True if the document is a page from a resume or cv")
+
+    is_academic_paper: Optional[bool] = None
+    is_textbook: Optional[bool] = None
+    is_news_article: Optional[bool] = None
+    is_test_or_quiz: Optional[bool] = None
+    is_homework_assignment: Optional[bool] = None
+    is_class_syllabus: Optional[bool] = None
+    is_meeting_minutes: Optional[bool] = None
+    is_legal_contract: Optional[bool] = None
+    is_form: Optional[bool] = None
+    is_correspondence_or_letter: Optional[bool] = None
+    is_public_order: Optional[bool] = None
+    is_court_notice: Optional[bool] = None
+    is_completion_certificate: Optional[bool] = None
+
+    contains_pii: Optional[bool] = Field(None, description="True if document contains PII")
 
 
 async def _process_single_page(page_text: str) -> PIIClassification:
@@ -89,13 +104,13 @@ async def _process_single_page(page_text: str) -> PIIClassification:
                         "type": "text",
                         "text": (
                             f"{text}\n\n-----------\n"
-                            "Given the text above, determine what type of document it is, and if it's a resume/CV. answer in JSON. The format of your json object should be {'primary_language': str, 'document_type': str, 'is_resume_cv': bool, 'contains_pii': bool}"
+                            "Given the text above, determine what type of document it is. Answer in JSON. The format of your json object should be {'primary_language': str, 'document_type': str, 'is_resume_cv': bool, 'is_academic_paper': bool, 'is_textbook': bool, 'is_news_article': bool, 'is_test_or_quiz': bool, 'is_homework_assignment': bool, 'is_class_syllabus': bool, 'is_meeting_minutes': bool, 'is_legal_contract': bool, 'is_form': bool, 'is_correspondence_or_letter': bool, 'is_public_order': bool, 'is_court_notice': bool, 'is_completion_certificate': bool, 'contains_pii': bool}"
                         ),
                     }
                 ],
             }
         ],
-        "max_tokens": 100,
+        "max_tokens": 400,
         "temperature": 0.0,
         "response_format": {"type": "json_schema", "json_schema": {"name": "PIIClassification", "schema": PIIClassification.model_json_schema()}},
     }
@@ -234,41 +249,41 @@ async def process_dolma_document(args, dolma_doc, sem):
     doc_id = dolma_doc.get("id")
     text = dolma_doc.get("text", "") or ""
 
-    language_key_name = f"{args.model.replace('/', '_')}_language"
-    resume_cv_key_name = f"{args.model.replace('/', '_')}_is_resume_cv"
+    # Create keys for all fields in PIIClassification
+    prefix = args.model.replace("/", "_") + "_v2tag_"
+    result_attributes = {}
 
-    result_attributes = {resume_cv_key_name: [], language_key_name: []}
+    # Initialize attribute lists for all PIIClassification fields
+    for field_name in PIIClassification.model_fields:
+        key_name = f"{prefix}_{field_name}"
+        result_attributes[key_name] = []
 
-    # If pdf_page_numbers is present, split the text and process each page separately
+    # If pdf_page_numbers is present, sample first 5000 characters of the document
     if "attributes" in dolma_doc and "pdf_page_numbers" in dolma_doc["attributes"]:
         page_numbers = dolma_doc["attributes"]["pdf_page_numbers"]
 
-        logger.info(f"Document {doc_id} has {len(page_numbers)} pages, processing each individually")
+        logger.info(f"Document {doc_id} has {len(page_numbers)} pages, processing first 5000 characters")
 
-        # Filter pages down to actual real content
-        selected_page_numbers = [tuple(p) for p in page_numbers if p[0] < p[1]]
-        first_page_number = selected_page_numbers[0]
+        # Take first 5000 characters of the document
+        sample_text = text[:5000]
+        text_length = len(text)
+        span_end = min(5000, text_length)
 
-        # Sample 3 pages max per document, but always include the first page, it's a good signal for CV classification
-        random.shuffle(selected_page_numbers)
-        selected_page_numbers = selected_page_numbers[:3]
+        # Process the sample with the semaphore to limit concurrent requests
+        async with sem:
+            pii_class = await _process_single_page(sample_text)
 
-        if first_page_number not in selected_page_numbers:
-            selected_page_numbers[0] = first_page_number
+        # Add all classification attributes to results
+        for field_name in PIIClassification.model_fields:
+            key_name = f"{prefix}_{field_name}"
+            attribute_value = getattr(pii_class, field_name)
 
-        for start_pos, end_pos, page_num in page_numbers:
-            if (start_pos, end_pos, page_num) in selected_page_numbers:
-                page_text = text[start_pos:end_pos]
+            # Create a span from 0 to min(5000, len(text)) with the attribute value
+            result_attributes[key_name].append([0, span_end, attribute_value])
 
-                # Process each page with the semaphore to limit concurrent requests
-                async with sem:
-                    pii_class = await _process_single_page(page_text)
-
-                result_attributes[resume_cv_key_name].append([start_pos, end_pos, pii_class.is_resume_cv])
-                result_attributes[language_key_name].append([start_pos, end_pos, pii_class.primary_language])
-            else:
-                result_attributes[resume_cv_key_name].append([start_pos, end_pos, None])
-                result_attributes[language_key_name].append([start_pos, end_pos, None])
+            # If the document is longer than 5000 characters, add a null span for the rest
+            if text_length > 5000:
+                result_attributes[key_name].append([span_end, text_length, None])
 
         return result_attributes
     else:
@@ -641,7 +656,7 @@ def submit_beaker_job(args):
                     preemptible=True,
                 ),
                 image=BeakerImageSource(beaker=beaker_image),
-                command=["python", "scripts/pii/tagging_pipeline.py"] + args_list,
+                command=["python", "scripts/pii/tagging_pipeline_phase1.py"] + args_list,
                 env_vars=[BeakerEnvVar(name="BEAKER_JOB_NAME", value=task_name), BeakerEnvVar(name="OWNER", value=owner), BeakerEnvVar(name="HF_HUB_OFFLINE", value="1")]
                 + env_var_secrets,
                 resources=BeakerTaskResources(gpu_count=1, memory="125GB"),
