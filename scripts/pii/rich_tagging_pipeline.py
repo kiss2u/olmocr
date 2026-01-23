@@ -408,7 +408,39 @@ async def process_dolma_document(args, dolma_doc, sem):
 
         return result_attributes
     else:
-        raise NotImplementedError("Missing code here, expecting this to be dolma docs made by olmocr....")
+        # Document without pdf_page_numbers - sample first N characters
+        SAMPLE_LENGTH = 2000
+        sample_text = text[:SAMPLE_LENGTH]
+        text_length = len(text)
+        span_end = min(SAMPLE_LENGTH, text_length)
+
+        async with sem:
+            pii_class = await _process_single_page(sample_text)
+
+        # Add all attributes from RichPIIClassification
+        result_attributes[contains_pii_key_name].append([0, span_end, pii_class.contains_any_pii()])
+        result_attributes[language_key_name].append([0, span_end, pii_class.primary_language])
+        result_attributes[f"{model_prefix}_is_public_document"].append([0, span_end, pii_class.is_public_document])
+        result_attributes[f"{model_prefix}_contains_pii_government_id"].append([0, span_end, pii_class.contains_pii_government_id])
+        result_attributes[f"{model_prefix}_contains_pii_financial_info"].append([0, span_end, pii_class.contains_pii_financial_info])
+        result_attributes[f"{model_prefix}_contains_pii_biometric_data"].append([0, span_end, pii_class.contains_pii_biometric_data])
+        result_attributes[f"{model_prefix}_contains_pii_login_info"].append([0, span_end, pii_class.contains_pii_login_info])
+        result_attributes[f"{model_prefix}_contains_identifier_name"].append([0, span_end, pii_class.contains_identifier_name])
+        result_attributes[f"{model_prefix}_contains_identifier_email"].append([0, span_end, pii_class.contains_identifier_email])
+        result_attributes[f"{model_prefix}_contains_identifier_phone_number"].append([0, span_end, pii_class.contains_identifier_phone_number])
+        result_attributes[f"{model_prefix}_contains_identifier_with_address"].append([0, span_end, pii_class.contains_identifier_with_address])
+        result_attributes[f"{model_prefix}_contains_identifier_with_biographical_info"].append([0, span_end, pii_class.contains_identifier_with_biographical_info])
+        result_attributes[f"{model_prefix}_contains_identifier_with_location_info"].append([0, span_end, pii_class.contains_identifier_with_location_info])
+        result_attributes[f"{model_prefix}_contains_identifier_with_employment_info"].append([0, span_end, pii_class.contains_identifier_with_employment_info])
+        result_attributes[f"{model_prefix}_contains_identifier_with_education_info"].append([0, span_end, pii_class.contains_identifier_with_education_info])
+        result_attributes[f"{model_prefix}_contains_identifier_with_medical_info"].append([0, span_end, pii_class.contains_identifier_with_medical_info])
+
+        # If the document is longer than the sample, add null spans for the rest
+        if text_length > SAMPLE_LENGTH:
+            for attr_key in result_attributes:
+                result_attributes[attr_key].append([span_end, text_length, None])
+
+        return result_attributes
 
 
 async def process_file(args, worker_id: int, file_uri: str):
@@ -786,7 +818,6 @@ def submit_beaker_job(args):
                 env_vars=[
                     BeakerEnvVar(name="BEAKER_JOB_NAME", value=task_name),
                     BeakerEnvVar(name="OWNER", value=owner),
-                    BeakerEnvVar(name="HF_HUB_OFFLINE", value="1"),
                 ]
                 + env_var_secrets,
                 resources=BeakerTaskResources(gpu_count=1, memory="125GB"),

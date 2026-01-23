@@ -257,36 +257,28 @@ async def process_dolma_document(args, dolma_doc, sem):
         key_name = f"{prefix}_{field_name}"
         result_attributes[key_name] = []
 
-    # If pdf_page_numbers is present, sample first 5000 characters of the document
-    if "attributes" in dolma_doc and "pdf_page_numbers" in dolma_doc["attributes"]:
-        page_numbers = dolma_doc["attributes"]["pdf_page_numbers"]
+    # Take first 5000 characters of the document for classification
+    sample_text = text[:5000]
+    text_length = len(text)
+    span_end = min(5000, text_length)
 
-        logger.info(f"Document {doc_id} has {len(page_numbers)} pages, processing first 5000 characters")
+    # Process the sample with the semaphore to limit concurrent requests
+    async with sem:
+        pii_class = await _process_single_page(sample_text)
 
-        # Take first 5000 characters of the document
-        sample_text = text[:5000]
-        text_length = len(text)
-        span_end = min(5000, text_length)
+    # Add all classification attributes to results
+    for field_name in PIIClassification.model_fields:
+        key_name = f"{prefix}_{field_name}"
+        attribute_value = getattr(pii_class, field_name)
 
-        # Process the sample with the semaphore to limit concurrent requests
-        async with sem:
-            pii_class = await _process_single_page(sample_text)
+        # Create a span from 0 to min(5000, len(text)) with the attribute value
+        result_attributes[key_name].append([0, span_end, attribute_value])
 
-        # Add all classification attributes to results
-        for field_name in PIIClassification.model_fields:
-            key_name = f"{prefix}_{field_name}"
-            attribute_value = getattr(pii_class, field_name)
+        # If the document is longer than 5000 characters, add a null span for the rest
+        if text_length > 5000:
+            result_attributes[key_name].append([span_end, text_length, None])
 
-            # Create a span from 0 to min(5000, len(text)) with the attribute value
-            result_attributes[key_name].append([0, span_end, attribute_value])
-
-            # If the document is longer than 5000 characters, add a null span for the rest
-            if text_length > 5000:
-                result_attributes[key_name].append([span_end, text_length, None])
-
-        return result_attributes
-    else:
-        raise NotImplementedError("Missing code here, expecting this to be dolma docs made by olmocr....")
+    return result_attributes
 
 
 async def process_file(args, worker_id: int, file_uri: str):
@@ -659,7 +651,6 @@ def submit_beaker_job(args):
                 env_vars=[
                     BeakerEnvVar(name="BEAKER_JOB_NAME", value=task_name),
                     BeakerEnvVar(name="OWNER", value=owner),
-                    BeakerEnvVar(name="HF_HUB_OFFLINE", value="1"),
                 ]
                 + env_var_secrets,
                 resources=BeakerTaskResources(gpu_count=1, memory="125GB"),
