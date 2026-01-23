@@ -656,7 +656,7 @@ def submit_beaker_job(args):
                     preemptible=True,
                 ),
                 image=BeakerImageSource(beaker=beaker_image),
-                command=["python", "scripts/pii/tagging_pipeline_phase1.py"] + args_list,
+                command=["python", "scripts/pii/tagging_pipeline.py"] + args_list,
                 env_vars=[BeakerEnvVar(name="BEAKER_JOB_NAME", value=task_name), BeakerEnvVar(name="OWNER", value=owner), BeakerEnvVar(name="HF_HUB_OFFLINE", value="1")]
                 + env_var_secrets,
                 resources=BeakerTaskResources(gpu_count=1, memory="125GB"),
