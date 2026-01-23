@@ -991,22 +991,21 @@ async def metrics_reporter(work_queue):
 def submit_beaker_job(args):
     from beaker import (  # type: ignore
         Beaker,
-        Constraints,
-        EnvVar,
-        ExperimentSpec,
-        ImageSource,
-        Priority,
-        ResultSpec,
-        RetrySpec,
-        SecretNotFound,
-        TaskContext,
-        TaskResources,
-        TaskSpec,
+        BeakerConstraints,
+        BeakerEnvVar,
+        BeakerExperimentSpec,
+        BeakerImageSource,
+        BeakerJobPriority,
+        BeakerResultSpec,
+        BeakerRetrySpec,
+        BeakerTaskContext,
+        BeakerTaskResources,
+        BeakerTaskSpec,
     )
+    from beaker.exceptions import BeakerSecretNotFound
 
     b = Beaker.from_env(default_workspace=args.beaker_workspace)
-    account = b.account.whoami()
-    owner = account.name
+    owner = b.user_name
     beaker_image = f"jakep/olmocr-inference-{VERSION}"
 
     task_name = f"olmocr-{os.path.basename(args.workspace.rstrip('/'))}"
@@ -1018,10 +1017,10 @@ def submit_beaker_job(args):
     args_list = [arg for i, arg in enumerate(args_list) if not (arg.startswith("--pdfs") or (i > 0 and args_list[i - 1] == "--pdfs"))]
 
     try:
-        b.secret.get(f"{owner}-WEKA_ACCESS_KEY_ID", args.beaker_workspace)
-        b.secret.get(f"{owner}-WEKA_SECRET_ACCESS_KEY", args.beaker_workspace)
-        b.secret.get(f"{owner}-AWS_CREDENTIALS_FILE", args.beaker_workspace)
-    except SecretNotFound:
+        b.secret.get(f"{owner}-WEKA_ACCESS_KEY_ID")
+        b.secret.get(f"{owner}-WEKA_SECRET_ACCESS_KEY")
+        b.secret.get(f"{owner}-AWS_CREDENTIALS_FILE")
+    except BeakerSecretNotFound:
         print(
             f"Expected beaker secrets for accessing Weka and S3 are not found. Are you okay to write those to your beaker workspace {args.beaker_workspace}? [y/n]"
         )
@@ -1030,30 +1029,29 @@ def submit_beaker_job(args):
             print("Exiting...")
             sys.exit(1)
 
-        b.secret.write(f"{owner}-WEKA_ACCESS_KEY_ID", os.environ.get("WEKA_ACCESS_KEY_ID", ""), args.beaker_workspace)
-        b.secret.write(f"{owner}-WEKA_SECRET_ACCESS_KEY", os.environ.get("WEKA_SECRET_ACCESS_KEY", ""), args.beaker_workspace)
+        b.secret.write(f"{owner}-WEKA_ACCESS_KEY_ID", os.environ.get("WEKA_ACCESS_KEY_ID", ""))
+        b.secret.write(f"{owner}-WEKA_SECRET_ACCESS_KEY", os.environ.get("WEKA_SECRET_ACCESS_KEY", ""))
         b.secret.write(
             f"{owner}-AWS_CREDENTIALS_FILE",
             open(os.path.join(os.path.expanduser("~"), ".aws", "credentials")).read(),
-            args.beaker_workspace,
         )
 
     env_var_secrets = [
-        EnvVar(name="WEKA_ACCESS_KEY_ID", secret=f"{owner}-WEKA_ACCESS_KEY_ID"),
-        EnvVar(name="WEKA_SECRET_ACCESS_KEY", secret=f"{owner}-WEKA_SECRET_ACCESS_KEY"),
-        EnvVar(name="AWS_CREDENTIALS_FILE", secret=f"{owner}-AWS_CREDENTIALS_FILE"),
+        BeakerEnvVar(name="WEKA_ACCESS_KEY_ID", secret=f"{owner}-WEKA_ACCESS_KEY_ID"),
+        BeakerEnvVar(name="WEKA_SECRET_ACCESS_KEY", secret=f"{owner}-WEKA_SECRET_ACCESS_KEY"),
+        BeakerEnvVar(name="AWS_CREDENTIALS_FILE", secret=f"{owner}-AWS_CREDENTIALS_FILE"),
     ]
 
     try:
-        b.secret.get("OLMOCR_PREVIEW_HF_TOKEN", args.beaker_workspace)
-        env_var_secrets.append(EnvVar(name="HF_TOKEN", secret="OLMOCR_PREVIEW_HF_TOKEN"))
-    except SecretNotFound:
+        b.secret.get("OLMOCR_PREVIEW_HF_TOKEN")
+        env_var_secrets.append(BeakerEnvVar(name="HF_TOKEN", secret="OLMOCR_PREVIEW_HF_TOKEN"))
+    except BeakerSecretNotFound:
         pass
 
     try:
-        b.secret.get("OE_DATA_GCS_SA_KEY", args.beaker_workspace)
-        env_var_secrets.append(EnvVar(name="GOOGLE_APPLICATION_CREDENTIALS_FILE", secret="OE_DATA_GCS_SA_KEY"))
-    except SecretNotFound:
+        b.secret.get("OE_DATA_GCS_SA_KEY")
+        env_var_secrets.append(BeakerEnvVar(name="GOOGLE_APPLICATION_CREDENTIALS_FILE", secret="OE_DATA_GCS_SA_KEY"))
+    except BeakerSecretNotFound:
         print("Input the olmo-gcs SA key if you would like to load weights from gcs (end with a double newline):")
         lines = []
         prev_empty = False
@@ -1064,38 +1062,38 @@ def submit_beaker_job(args):
             lines.append(line)
         gcs_sa_key = "\n".join(lines[:-1]).strip()  # Remove the last empty line
         if gcs_sa_key:
-            b.secret.write("OE_DATA_GCS_SA_KEY", gcs_sa_key, args.beaker_workspace)
-            env_var_secrets.append(EnvVar(name="GOOGLE_APPLICATION_CREDENTIALS_FILE", secret="OE_DATA_GCS_SA_KEY"))
+            b.secret.write("OE_DATA_GCS_SA_KEY", gcs_sa_key)
+            env_var_secrets.append(BeakerEnvVar(name="GOOGLE_APPLICATION_CREDENTIALS_FILE", secret="OE_DATA_GCS_SA_KEY"))
 
     # Create the experiment spec
-    experiment_spec = ExperimentSpec(
+    experiment_spec = BeakerExperimentSpec(
         budget="ai2/oe-base",
         description=task_name,
         tasks=[
-            TaskSpec(
+            BeakerTaskSpec(
                 name=task_name,
                 propagate_failure=False,
                 propagate_preemption=False,
                 replicas=args.beaker_gpus,
-                context=TaskContext(
-                    priority=Priority(args.beaker_priority),
+                context=BeakerTaskContext(
+                    priority=BeakerJobPriority[args.beaker_priority],
                     preemptible=True,
                 ),
-                image=ImageSource(beaker=beaker_image),
+                image=BeakerImageSource(beaker=beaker_image),
                 command=["python", "-m", "olmocr.pipeline"] + args_list,
-                env_vars=[EnvVar(name="BEAKER_JOB_NAME", value=task_name), EnvVar(name="OWNER", value=owner), EnvVar(name="HF_HUB_OFFLINE", value="1")]
+                env_vars=[BeakerEnvVar(name="BEAKER_JOB_NAME", value=task_name), BeakerEnvVar(name="OWNER", value=owner), BeakerEnvVar(name="HF_HUB_OFFLINE", value="1")]
                 + env_var_secrets,
-                resources=TaskResources(gpu_count=1, memory="125GB"),  # Have to set a memory limit, otherwise VLLM may use too much on its own
-                constraints=Constraints(cluster=args.beaker_cluster if isinstance(args.beaker_cluster, list) else [args.beaker_cluster]),
-                result=ResultSpec(path="/noop-results"),
+                resources=BeakerTaskResources(gpu_count=1, memory="125GB"),  # Have to set a memory limit, otherwise VLLM may use too much on its own
+                constraints=BeakerConstraints(cluster=args.beaker_cluster if isinstance(args.beaker_cluster, list) else [args.beaker_cluster]),
+                result=BeakerResultSpec(path="/noop-results"),
             )
         ],
-        retry=RetrySpec(allowed_task_retries=10),
+        retry=BeakerRetrySpec(allowed_task_retries=10),
     )
 
-    experiment_data = b.experiment.create(spec=experiment_spec, workspace=args.beaker_workspace)
+    workload = b.experiment.create(spec=experiment_spec)
 
-    print(f"Experiment URL: https://beaker.org/ex/{experiment_data.id}")
+    print(f"Experiment URL: https://beaker.org/ex/{workload.experiment.id}")
 
 
 def print_stats(args, root_work_queue):
