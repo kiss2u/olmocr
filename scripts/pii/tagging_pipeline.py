@@ -245,7 +245,6 @@ async def process_dolma_document(args, dolma_doc, sem):
 
     Always returns: (doc_id, contains_pii: bool, text_length: int)
     """
-    doc_id = dolma_doc.get("id")
     text = dolma_doc.get("text", "") or ""
 
     # Create keys for all fields in PIIClassification

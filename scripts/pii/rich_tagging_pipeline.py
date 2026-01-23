@@ -429,7 +429,9 @@ async def process_dolma_document(args, dolma_doc, sem):
         result_attributes[f"{model_prefix}_contains_identifier_email"].append([0, span_end, pii_class.contains_identifier_email])
         result_attributes[f"{model_prefix}_contains_identifier_phone_number"].append([0, span_end, pii_class.contains_identifier_phone_number])
         result_attributes[f"{model_prefix}_contains_identifier_with_address"].append([0, span_end, pii_class.contains_identifier_with_address])
-        result_attributes[f"{model_prefix}_contains_identifier_with_biographical_info"].append([0, span_end, pii_class.contains_identifier_with_biographical_info])
+        result_attributes[f"{model_prefix}_contains_identifier_with_biographical_info"].append(
+            [0, span_end, pii_class.contains_identifier_with_biographical_info]
+        )
         result_attributes[f"{model_prefix}_contains_identifier_with_location_info"].append([0, span_end, pii_class.contains_identifier_with_location_info])
         result_attributes[f"{model_prefix}_contains_identifier_with_employment_info"].append([0, span_end, pii_class.contains_identifier_with_employment_info])
         result_attributes[f"{model_prefix}_contains_identifier_with_education_info"].append([0, span_end, pii_class.contains_identifier_with_education_info])
