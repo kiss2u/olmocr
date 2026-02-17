@@ -186,7 +186,7 @@ We also ship a comprehensive benchmark suite covering over 7,000 test cases acro
 ### Installation
 
 Requirements:
- - Recent NVIDIA GPU (tested on RTX 4090, L40S, A100, H100) with at least 15 GB of GPU RAM
+ - Recent NVIDIA GPU (tested on RTX 4090, L40S, A100, H100) with at least 12 GB of GPU RAM
  - 30GB of free disk space
 
 You will need to install poppler-utils and additional fonts for rendering PDF images.
@@ -211,6 +211,12 @@ pip install olmocr[gpu]  --extra-index-url https://download.pytorch.org/whl/cu12
 
 # Recommended: Install flash infer for faster inference on GPU
 pip install https://download.pytorch.org/whl/cu128/flashinfer/flashinfer_python-0.2.5%2Bcu128torch2.7-cp38-abi3-linux_x86_64.whl
+```
+
+Also, if you run into errors about `too many open files`, please update your ulimit accordingly:
+
+```bash
+ulimit -n 65536
 ```
 
 ### Local Usage Example
@@ -258,12 +264,13 @@ If you have a vLLM server already running elsewhere (or any inference platform i
 
 ```bash
 # Use external vLLM server instead of local one
-python -m olmocr.pipeline ./localworkspace --server http://remote-server:8000/v1 --markdown --pdfs tests/gnarly_pdfs/*.pdf
+python -m olmocr.pipeline ./localworkspace --server http://remote-server:8000/v1 --model allenai/olmOCR-2-7B-1025-FP8 --markdown --pdfs tests/gnarly_pdfs/*.pdf
 ```
+The served model name in VLLM needs to match the value provided in `--model`.
 
-The served model name should be `olmocr`. An example vLLM launch command would be:
+An example vLLM launch command would be:
 ```bash
-vllm serve allenai/olmOCR-2-7B-1025-FP8 --served-model-name olmocr --max-model-len 16384
+vllm serve allenai/olmOCR-2-7B-1025-FP8 --max-model-len 16384
 ```
 
 #### Verified External Providers
@@ -272,14 +279,16 @@ We have tested `olmOCR-2-7B-1025-FP8` on these external model providers and conf
 
 |                                                                             | $/1M Input tokens | $/1M Output tokens | Example Command                                                                                                                                                                |
 |-----------------------------------------------------------------------------|-------------------|--------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| [Cirrascale](https://ai2endpoints.cirrascale.ai/models/overview)            | $0.07             | $0.15              | `python -m olmocr.pipeline ./localworkspace1 --server https://ai2endpoints.cirrascale.ai/api --api_key sk-XXXXXXX --model olmOCR-2-7B-1025 --pdfs tests/gnarly_pdfs/*.pdf`     |
-| [DeepInfra](https://deepinfra.com/)                                         | $0.09             | $0.19              | `python -m olmocr.pipeline ./localworkspace1 --server https://api.deepinfra.com/v1/openai --api_key DfXXXXXXX --model allenai/olmOCR-2-7B-1025 --pdfs tests/gnarly_pdfs/*.pdf` |
-| [Parasail](https://www.saas.parasail.io/serverless?name=olmocr-7b-1025-fp8) | $0.10             | $0.20              | `python -m olmocr.pipeline ./localworkspace1 --server https://api.parasail.io/v1 --api_key psk-XXXXX --model allenai/olmOCR-2-7B-1025 --pdfs tests/gnarly_pdfs/*.pdf`          |
+| [Cirrascale](https://ai2endpoints.cirrascale.ai/models/overview)            | $0.07             | $0.15              | `python -m olmocr.pipeline ./localworkspace1 --server https://ai2endpoints.cirrascale.ai/api --api_key sk-XXXXXXX --workers 1 --max_concurrent_requests 20 --model olmOCR-2-7B-1025 --pdfs tests/gnarly_pdfs/*.pdf`     |
+| [DeepInfra](https://deepinfra.com/)                                         | $0.09             | $0.19              | `python -m olmocr.pipeline ./localworkspace1 --server https://api.deepinfra.com/v1/openai --api_key DfXXXXXXX --workers 1 --max_concurrent_requests 20 --model allenai/olmOCR-2-7B-1025 --pdfs tests/gnarly_pdfs/*.pdf` |
+| [Parasail](https://www.saas.parasail.io/serverless?name=olmocr-7b-1025-fp8) | $0.10             | $0.20              | `python -m olmocr.pipeline ./localworkspace1 --server https://api.parasail.io/v1 --api_key psk-XXXXX --workers 1 --max_concurrent_requests 20 --model allenai/olmOCR-2-7B-1025 --pdfs tests/gnarly_pdfs/*.pdf`          |
 
 
 Notes on arguments
 - `--server`: Defines the OpenAI-compatible endpoint: ex `https://api.deepinfra.com/v1/openai`
 - `--api_key`: Your API key, bassed in via Authorization Bearer HTTP header
+- `--max_concurrent_requests`: Max concurrent requests that will be in-flight to the inference provider at one time
+- `--workers`: Max number of page groups that will be processed at once. You may want to set this to `1` so that you finish one group of stuff before moving on.
 - `--pages_per_group`: You may want a smaller number of pages per group as many external provides have lower concurrent request limits
 - `--model`: The model identifier, ex. `allenai/olmOCR-2-7B-1025`, different providers have different names, and if you run locally, you can use `olmocr`
 - Other arguments work the same as with local inference
@@ -314,32 +323,43 @@ python -m olmocr.pipeline s3://my_s3_bucket/pdfworkspaces/exampleworkspace --pdf
 
 ### Using Docker
 
-Pull the Docker image.
+Pull the Docker image (large, includes the model, ~30GB):
+```bash
+docker pull alleninstituteforai/olmocr:latest-with-model
+```
+
+For advanced users who want to manage their own model downloads, we also provide a base image without the model:
 ```bash
 docker pull alleninstituteforai/olmocr:latest
 ```
 
-To run the container interactively:
+#### Quick Start - Process PDFs
+
+Process a single PDF in your current directory:
 ```bash
-docker run -it --gpus all --name olmocr_container alleninstituteforai/olmocr:latest /bin/bash
+docker run --gpus all \
+  -v $(pwd):/workspace \
+  alleninstituteforai/olmocr:latest-with-model \
+  -c "python -m olmocr.pipeline /workspace/output --markdown --pdfs /workspace/sample.pdf"
 ```
 
-If you want to access your local files inside the container, use volume mounting:
+Process multiple PDFs:
 ```bash
-docker run -it --gpus all \
-  -v /path/to/your/local/files:/local_files \
-  --name olmocr_container \
-  alleninstituteforai/olmocr:latest /bin/bash
+docker run --gpus all \
+  -v /path/to/pdfs:/input \
+  -v /path/to/output:/output \
+  alleninstituteforai/olmocr:latest-with-model \
+  -c "python -m olmocr.pipeline /output --markdown --pdfs /input/*.pdf"
 ```
 
-All dependencies are already installed. Once you’re inside the container, you can run olmOCR commands. For example:
+#### Interactive Mode
 
+Run the container interactively for exploration and debugging:
 ```bash
-curl -o olmocr-sample.pdf https://olmocr.allenai.org/papers/olmocr_3pg_sample.pdf
-
-python -m olmocr.pipeline ./localworkspace --markdown --pdfs olmocr-sample.pdf
+docker run -it --gpus all alleninstituteforai/olmocr:latest-with-model
 ```
-> You can also visit our Docker repository on [Docker Hub](https://hub.docker.com/r/alleninstituteforai/olmocr).
+
+> Visit our Docker repository on [Docker Hub](https://hub.docker.com/r/alleninstituteforai/olmocr) for more information.
 
 ### Full documentation for the pipeline
 

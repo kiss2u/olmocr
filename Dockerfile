@@ -1,4 +1,4 @@
-FROM vllm/vllm-openai:v0.11.0
+FROM vllm/vllm-openai:v0.11.2
 
 ENV PYTHON_VERSION=3.12
 ENV CUSTOM_PY="/usr/bin/python${PYTHON_VERSION}"
@@ -54,3 +54,6 @@ RUN playwright install-deps
 RUN playwright install chromium
 
 RUN python3 -m olmocr.pipeline --help
+
+# Override the vLLM base image's entrypoint to allow interactive bash access
+ENTRYPOINT ["/bin/bash"]

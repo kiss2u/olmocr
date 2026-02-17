@@ -144,7 +144,7 @@ while arg_idx < len(sys.argv):
 b = Beaker.from_env(default_workspace="ai2/olmocr")
 
 # Build the pipeline command with optional parameters
-pipeline_cmd = "python -m olmocr.pipeline ./localworkspace --markdown --pdfs ./olmOCR-bench/bench_data/pdfs/**/*.pdf"
+pipeline_cmd = "python -m olmocr.pipeline ./localworkspace --markdown --pdfs ./olmOCR-bench/bench_data/pdfs/**/*.pdf --workers 1 --max_concurrent_requests 20"
 if model:
     pipeline_cmd += f" --model {model}"
 if server:

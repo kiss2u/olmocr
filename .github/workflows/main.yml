@@ -211,7 +211,7 @@ jobs:
             dist/*
 
   docker-build:
-    name: Build and Push Docker Image
+    name: Build and Push Docker Images
     runs-on: large-olmocr-runner
     needs: [release]
     if: startsWith(github.ref, 'refs/tags/')
@@ -246,8 +246,8 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Extract metadata
-        id: meta
+      - name: Extract metadata for base image
+        id: meta-base
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
@@ -258,17 +258,41 @@ jobs:
           flavor: |
             latest=true
 
-      - name: Build and push Docker image
+      - name: Build and push base Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
           file: ./Dockerfile
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ steps.meta-base.outputs.tags }}
+          labels: ${{ steps.meta-base.outputs.labels }}
           platforms: linux/amd64
           outputs: type=registry
           no-cache: true
+
+      - name: Extract metadata for image with model
+        id: meta-with-model
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=tag,suffix=-with-model
+            type=semver,pattern={{version}}-with-model
+            type=semver,pattern={{major}}.{{minor}}-with-model
+          flavor: |
+            latest=auto
+            suffix=-with-model,onlatest=true
+
+      - name: Build and push Docker image with model
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.with-model
+          push: true
+          tags: ${{ steps.meta-with-model.outputs.tags }}
+          labels: ${{ steps.meta-with-model.outputs.labels }}
+          platforms: linux/amd64
+          outputs: type=registry
 
       # jakep: push to beaker can't work because of limitted disk space on these runners
       # jakep: (you can try by setting load: true above, but you'll need a larger runner)

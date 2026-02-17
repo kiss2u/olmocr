@@ -8,7 +8,12 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from PIL import Image
 
-from olmocr.pipeline import PageResult, build_page_query, process_page
+from olmocr.pipeline import (
+    PageResult,
+    build_page_query,
+    get_markdown_path,
+    process_page,
+)
 
 
 def create_test_image(width=100, height=150):
@@ -506,3 +511,60 @@ Document correctly oriented at 90 degrees total rotation."""
         assert build_page_query_calls[0] == 0  # First call with no rotation
         assert build_page_query_calls[1] == 270  # Second call with 270 degree rotation
         assert build_page_query_calls[2] == 90  # Third call with wrapped rotation (270 + 180 = 450 % 360 = 90)
+
+
+class TestMarkdownPathHandling:
+    """Tests for the get_markdown_path function to ensure files stay within workspace."""
+
+    def test_absolute_local_path_stays_in_workspace(self):
+        """
+        Test that absolute local paths produce markdown paths inside the workspace.
+
+        This is a regression test for a bug where passing absolute paths like
+        /home/user/documents/file.pdf would cause the markdown output to be written
+        to /home/user/documents/file.md instead of workspace/markdown/.../file.md
+        """
+        workspace = "/tmp/test_workspace"
+        source_file = "/home/ubuntu/test_documents/subfolder/test_document.pdf"
+
+        markdown_path = get_markdown_path(workspace, source_file)
+
+        # The markdown path should be inside the workspace
+        assert markdown_path.startswith(workspace), (
+            f"BUG: Markdown path '{markdown_path}' is outside workspace '{workspace}'. " f"Absolute source paths should not escape the workspace directory."
+        )
+
+    def test_s3_path_stays_in_workspace(self):
+        """Test that S3 paths produce markdown paths inside the workspace."""
+        workspace = "/tmp/test_workspace"
+        source_file = "s3://my-bucket/documents/subfolder/test_document.pdf"
+
+        markdown_path = get_markdown_path(workspace, source_file)
+
+        assert markdown_path.startswith(workspace)
+        assert markdown_path == "/tmp/test_workspace/markdown/documents/subfolder/test_document.md"
+
+    def test_relative_local_path_stays_in_workspace(self):
+        """Test that relative local paths produce markdown paths inside the workspace."""
+        workspace = "/tmp/test_workspace"
+        source_file = "documents/subfolder/test_document.pdf"
+
+        markdown_path = get_markdown_path(workspace, source_file)
+
+        assert markdown_path.startswith(workspace)
+        assert markdown_path == "/tmp/test_workspace/markdown/documents/subfolder/test_document.md"
+
+    def test_path_traversal_with_dotdot_stays_in_workspace(self):
+        """Test that paths with ../ do not escape the workspace directory."""
+        workspace = "/tmp/test_workspace"
+        source_file = "documents/../../../etc/passwd.pdf"
+
+        markdown_path = get_markdown_path(workspace, source_file)
+
+        # Resolve the path to check if it actually stays in workspace
+        resolved_path = os.path.normpath(markdown_path)
+        resolved_workspace = os.path.normpath(workspace)
+
+        assert resolved_path.startswith(resolved_workspace), (
+            f"BUG: Path traversal attack! Markdown path '{resolved_path}' escapes " f"workspace '{resolved_workspace}'. Paths with ../ should be sanitized."
+        )
