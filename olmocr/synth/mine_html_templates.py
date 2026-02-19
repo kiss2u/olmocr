@@ -462,7 +462,7 @@ async def generate_html_from_image(client, image_base64):
         # skip this page, to keep the code simple
         orientation_response = await call_claude(
             client,
-            model="claude-sonnet-4-5-20250929",
+            model="claude-sonnet-4-6",
             max_tokens=1000,
             temperature=0,
             messages=[
@@ -507,7 +507,7 @@ async def generate_html_from_image(client, image_base64):
         # Step 1: Initial analysis and column detection
         analysis_response = await call_claude(
             client,
-            model="claude-sonnet-4-5-20250929",
+            model="claude-sonnet-4-6",
             max_tokens=20000,
             temperature=0.1,
             messages=[
@@ -547,7 +547,7 @@ async def generate_html_from_image(client, image_base64):
         # Step 2: Initial HTML generation with detailed layout instructions
         initial_response = await call_claude(
             client,
-            model="claude-sonnet-4-5-20250929",
+            model="claude-sonnet-4-6",
             max_tokens=20000,
             temperature=0.2,
             messages=[
@@ -633,7 +633,7 @@ async def generate_html_from_image(client, image_base64):
             # Step 4: Refinement - Show both images to Claude and ask for corrections
             refinement_response = await claude_stream(
                 client,
-                model="claude-sonnet-4-5-20250929",
+                model="claude-sonnet-4-6",
                 max_tokens=40000,
                 temperature=1.0,
                 thinking={"type": "enabled", "budget_tokens": 12000},
@@ -718,7 +718,7 @@ async def densify_html(client, html_content):
     try:
         dense_response = await claude_stream(
             client,
-            model="claude-sonnet-4-5-20250929",
+            model="claude-sonnet-4-6",
             max_tokens=50000,
             temperature=0.7,
             messages=[
