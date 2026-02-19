@@ -17,7 +17,6 @@ import pypdf
 from anthropic import AsyncAnthropic
 from bs4 import BeautifulSoup
 from markdownify import SPACES, MarkdownConverter
-from PIL import Image
 from playwright.async_api import async_playwright
 from syntok.segmenter import process
 from tqdm import tqdm
@@ -39,62 +38,16 @@ from olmocr.data.renderpdf import (
     render_pdf_to_base64png,
 )
 from olmocr.filter.filter import Language, PdfFilter
+from olmocr.synth.claude_client import (
+    DEFAULT_MODEL_NAME,
+    call_claude,
+    claude_stream,
+    extract_code_block,
+)
 
 # Global variables for tracking Claude API costs
 total_input_tokens = 0
 total_output_tokens = 0
-
-
-DEFAULT_MAX_RETRIES = 3
-DEFAULT_BACKOFF_SECONDS = 5
-
-
-def _is_overloaded_error(error: Exception) -> bool:
-    """Return True if the error indicates the Claude service is overloaded."""
-    return "Overloaded" in str(error)
-
-
-async def call_claude(
-    client: AsyncAnthropic,
-    *,
-    max_retries: int = DEFAULT_MAX_RETRIES,
-    initial_backoff: float = DEFAULT_BACKOFF_SECONDS,
-    **kwargs,
-):
-    """Call Claude with exponential backoff when the service is overloaded."""
-    delay = initial_backoff
-    for attempt in range(1, max_retries + 1):
-        try:
-            return await client.messages.create(**kwargs)
-        except Exception as error:
-            if not _is_overloaded_error(error) or attempt == max_retries:
-                raise
-
-            await asyncio.sleep(delay)
-            delay *= 2
-
-
-async def claude_stream(
-    client: AsyncAnthropic,
-    *,
-    max_retries: int = DEFAULT_MAX_RETRIES,
-    initial_backoff: float = DEFAULT_BACKOFF_SECONDS,
-    **kwargs,
-):
-    """Call Claude streaming endpoint and return final message with overload retries."""
-    delay = initial_backoff
-    for attempt in range(1, max_retries + 1):
-        try:
-            async with client.messages.stream(**kwargs) as stream:
-                async for _ in stream:
-                    pass
-                return await stream.get_final_message()
-        except Exception as error:
-            if not _is_overloaded_error(error) or attempt == max_retries:
-                raise
-
-            await asyncio.sleep(delay)
-            delay *= 2
 
 
 def get_git_commit_hash():
@@ -423,35 +376,6 @@ is_diagram: {metadata['is_diagram']}
         return frontmatter
 
 
-def extract_code_block(initial_response):
-    # Use regex to find the last instance of a code block
-    # First try to find HTML specific code blocks
-    html_blocks = re.findall(r"```html\n(.*?)```", initial_response, re.DOTALL)
-
-    # If HTML blocks found, return the last one
-    if html_blocks:
-        return html_blocks[-1].strip()
-
-    # Otherwise, try to find any code blocks
-    code_blocks = re.findall(r"```\n(.*?)```", initial_response, re.DOTALL)
-
-    # If code blocks found, return the last one
-    if code_blocks:
-        return code_blocks[-1].strip()
-
-    # If no code blocks found with newlines after backticks, try without newlines
-    html_blocks_no_newline = re.findall(r"```html(.*?)```", initial_response, re.DOTALL)
-    if html_blocks_no_newline:
-        return html_blocks_no_newline[-1].strip()
-
-    code_blocks_no_newline = re.findall(r"```(.*?)```", initial_response, re.DOTALL)
-    if code_blocks_no_newline:
-        return code_blocks_no_newline[-1].strip()
-
-    # Return empty string if no code blocks found
-    return None
-
-
 async def generate_html_from_image(client, image_base64):
     """Call Claude API to generate HTML from an image using a multi-step prompting strategy."""
     global total_input_tokens, total_output_tokens
@@ -462,7 +386,7 @@ async def generate_html_from_image(client, image_base64):
         # skip this page, to keep the code simple
         orientation_response = await call_claude(
             client,
-            model="claude-sonnet-4-6",
+            model=DEFAULT_MODEL_NAME,
             max_tokens=1000,
             temperature=0,
             messages=[
@@ -507,7 +431,7 @@ async def generate_html_from_image(client, image_base64):
         # Step 1: Initial analysis and column detection
         analysis_response = await call_claude(
             client,
-            model="claude-sonnet-4-6",
+            model=DEFAULT_MODEL_NAME,
             max_tokens=20000,
             temperature=0.1,
             messages=[
@@ -547,7 +471,7 @@ async def generate_html_from_image(client, image_base64):
         # Step 2: Initial HTML generation with detailed layout instructions
         initial_response = await call_claude(
             client,
-            model="claude-sonnet-4-6",
+            model=DEFAULT_MODEL_NAME,
             max_tokens=20000,
             temperature=0.2,
             messages=[
@@ -633,7 +557,7 @@ async def generate_html_from_image(client, image_base64):
             # Step 4: Refinement - Show both images to Claude and ask for corrections
             refinement_response = await claude_stream(
                 client,
-                model="claude-sonnet-4-6",
+                model=DEFAULT_MODEL_NAME,
                 max_tokens=40000,
                 temperature=1.0,
                 thinking={"type": "enabled", "budget_tokens": 12000},
@@ -711,59 +635,6 @@ async def generate_html_from_image(client, image_base64):
         return None
     
 
-async def densify_html(client, html_content):
-    """Call Claude API to generate HTML from an image using a multi-step prompting strategy."""
-    global total_input_tokens, total_output_tokens
-   
-    try:
-        dense_response = await claude_stream(
-            client,
-            model="claude-sonnet-4-6",
-            max_tokens=50000,
-            temperature=0.7,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": html_content
-                        },
-
-
-                        {
-                            "type": "text",
-                            "text": "The HTML above describes a webpage meant to render into a single printed PDF page. Please output a new full synthetic webpage that increases the amount of information on this page by 2X. "
-                            "Your goal is to shrink the font size and add more synthetic content so that the general idea and structure of the page is preserved, but so that it contains twice as many final tokens. "
-                            "Be careful to adjust any elements (such as footers) so that they will not overlap the main body of the newly expanded document. "
-                            "But remember that it still needs to render as a single static HTML page that will print out to ONE page on a printer or in PDF form. "
-                            "Output the complete revised HTML in a ```html code block."
-                        },
-                    ],
-                }
-            ],
-        )
-
-        dense_html_text = ""
-        for content in dense_response.content:
-            if content.type == "text":
-                dense_html_text += content.text
-
-        # Track token usage from refinement API call
-        if hasattr(dense_response, "usage"):
-            total_input_tokens += dense_response.usage.input_tokens
-            total_output_tokens += dense_response.usage.output_tokens
-
-        dense_html = extract_code_block(dense_html_text)
-        if not dense_html:
-            print("Warning: No HTML code block found in densifying response")
-            return None
-        
-        return dense_html
-
-    except Exception as e:
-        print(f"Error calling Claude API: {e}")
-        return None    
 
 
 def extract_page_from_pdf(input_path, output_path, page_num):
@@ -1850,67 +1721,6 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
     return unique_tests
 
 
-def apply_jpeg_compression(pdf_path, quality, temp_dir):
-    """
-    Apply JPEG compression to a PDF by converting to PNG, then to JPEG, then back to PDF.
-
-    Args:
-        pdf_path: Path to the input PDF file
-        quality: JPEG quality level (70-95)
-        temp_dir: Directory for temporary files
-
-    Returns:
-        bool: True if successful, False otherwise
-    """
-    try:
-        import base64
-        import io
-
-        # Create temp file paths
-        temp_jpeg_path = os.path.join(temp_dir, "temp_page.jpg")
-        temp_pdf_path = os.path.join(temp_dir, "temp_compressed.pdf")
-
-        # Convert PDF to PNG using existing render function (high resolution)
-        from olmocr.data.renderpdf import render_pdf_to_base64png
-
-        # Render at high resolution for better quality
-        png_base64 = render_pdf_to_base64png(pdf_path, 1, 1288)
-
-        # Decode base64 PNG data
-        png_data = base64.b64decode(png_base64)
-        png_buffer = io.BytesIO(png_data)
-
-        # Open the PNG and convert to JPEG with specified quality
-        with Image.open(png_buffer) as img:
-            # Convert RGBA to RGB if necessary
-            if img.mode in ('RGBA', 'LA', 'P'):
-                rgb_img = Image.new('RGB', img.size, (255, 255, 255))
-                # Paste using alpha channel as mask if available
-                if img.mode == 'RGBA' or img.mode == 'LA':
-                    rgb_img.paste(img, mask=img.split()[-1] if img.mode == 'RGBA' else img.split()[1])
-                else:
-                    rgb_img.paste(img)
-                img = rgb_img
-
-            # Save as JPEG with specified quality
-            img.save(temp_jpeg_path, 'JPEG', quality=quality, optimize=True)
-
-            # Convert JPEG back to PDF
-            img_for_pdf = Image.open(temp_jpeg_path)
-            img_for_pdf.save(temp_pdf_path, 'PDF', resolution=100.0)
-
-        # Replace original PDF with compressed version
-        os.replace(temp_pdf_path, pdf_path)
-
-        # Clean up temp files
-        if os.path.exists(temp_jpeg_path):
-            os.remove(temp_jpeg_path)
-
-        return True
-
-    except Exception as e:
-        print(f"Error applying JPEG compression: {e}")
-        return False
 
 
 def check_outputs_exist(pdf_id: str, page_num: int, args, existing_test_pdfs: set) -> bool:
@@ -2050,6 +1860,8 @@ async def process_pdf(pdf_info, args, client, pdf_filter=None, existing_test_pdf
             return None
 
         if args.densify:
+            from olmocr.synth.augmentations import densify_html
+
             html_content = await densify_html(client, html_content)
 
             if not html_content:
@@ -2108,6 +1920,8 @@ async def process_pdf(pdf_info, args, client, pdf_filter=None, existing_test_pdf
                     # Select a random quality level between 70 and 95
                     jpeg_quality = random_generator.randint(70, 95)
                     print(f"Applying JPEG compression with quality {jpeg_quality} to {playwright_pdf_path}")
+
+                    from olmocr.synth.augmentations import apply_jpeg_compression
 
                     compression_success = apply_jpeg_compression(
                         playwright_pdf_path,
@@ -2224,8 +2038,8 @@ async def main():
     parser.add_argument("--api_key", help="Claude API key (or set ANTHROPIC_API_KEY environment variable)")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose output including table test verification")
     parser.add_argument("--densify", action="store_true", help="Set to ask claude to double the density of information on this page synthetically")
-    parser.add_argument("--filter", action="store_true", help="Apply PDF filtering to remove forms, spam, and non-English content")
     parser.add_argument("--jpegify", action="store_true", help="Apply JPEG compression to rendered PDFs with random quality (70-95)")
+    parser.add_argument("--filter", action="store_true", help="Apply PDF filtering to remove forms, spam, and non-English content")
     parser.add_argument("--name", default="synthetic", help="Name for the output JSONL file and subfolder (default: synthetic)")
     args = parser.parse_args()
 
