@@ -933,10 +933,10 @@ class TestMineTests(unittest.TestCase):
             output_pdf_path = tmp_file.name
 
         # Render the HTML to PDF
-        render_success = asyncio.run(render_pdf_with_playwright(html_content=html_content, output_pdf_path=output_pdf_path, png_width=800, png_height=600))
+        render_result = asyncio.run(render_pdf_with_playwright(html_content=html_content, output_pdf_path=output_pdf_path, png_width=800, png_height=600))
 
         # Check if rendering was successful
-        self.assertTrue(render_success, "PDF rendering should succeed")
+        self.assertTrue(render_result.success, "PDF rendering should succeed")
 
         # Verify PDF was created and has content
         self.assertTrue(os.path.exists(output_pdf_path), "PDF file should exist")

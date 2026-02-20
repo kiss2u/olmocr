@@ -23,42 +23,22 @@ class CutoffElement:
     tag: str
     text: str
     visible_ratio: float  # 0.0 = fully hidden, 1.0 = fully visible
+    horizontal_visible_ratio: float = 1.0  # fraction of width visible after clipping
     bounding_rect: dict = field(default_factory=dict)
     clipping_ancestor_tag: Optional[str] = None
 
 
-async def detect_cutoff_text(
-    html_content: str,
-    viewport_width: int,
-    viewport_height: int,
-    visibility_threshold: float = 0.9,
-) -> List[CutoffElement]:
-    """
-    Detect text elements that are cut off due to overflow:hidden or viewport clipping.
+@dataclass
+class RenderResult:
+    """Result of rendering HTML to PDF, including cutoff detection info."""
 
-    Renders the HTML in a headless browser and checks each text-containing element's
-    bounding box against all ancestor elements that have overflow:hidden. If the
-    element's visible area (after clipping) is less than the threshold fraction of
-    its full area, it is flagged.
+    success: bool
+    scale_used: Optional[float] = None
+    cutoff_elements: List[CutoffElement] = field(default_factory=list)
+    has_cutoff: bool = False
 
-    Args:
-        html_content: The HTML string to analyze.
-        viewport_width: Width of the viewport in pixels.
-        viewport_height: Height of the viewport in pixels.
-        visibility_threshold: Elements with visible_ratio below this are flagged (0.0-1.0).
 
-    Returns:
-        List of CutoffElement instances for elements that are significantly cut off.
-    """
-    async with async_playwright() as p:
-        browser = await p.chromium.launch()
-        page = await browser.new_page(
-            viewport={"width": viewport_width, "height": viewport_height}
-        )
-        await page.set_content(html_content, wait_until="load")
-
-        cutoff_data = await page.evaluate(
-            """
+_CUTOFF_JS = """
             (threshold) => {
                 const results = [];
 
@@ -165,22 +145,8 @@ async def detect_cutoff_text(
                         ancestor = ancestor.parentElement;
                     }
 
-                    // Also clip to viewport
-                    const prevLeft = visLeft;
-                    const prevTop = visTop;
-                    const prevRight = visRight;
-                    const prevBottom = visBottom;
-
-                    visLeft = Math.max(visLeft, 0);
-                    visTop = Math.max(visTop, 0);
-                    visRight = Math.min(visRight, window.innerWidth);
-                    visBottom = Math.min(visBottom, window.innerHeight);
-
-                    if (!clippingAncestorTag &&
-                        (visLeft !== prevLeft || visTop !== prevTop ||
-                         visRight !== prevRight || visBottom !== prevBottom)) {
-                        clippingAncestorTag = 'VIEWPORT';
-                    }
+                    // Skip viewport clipping — PDF scaling handles viewport overflow.
+                    // We only care about overflow:hidden container clipping.
 
                     // Calculate areas using content dimensions (including overflow)
                     const contentWidth = rect.width + overflowX;
@@ -191,12 +157,14 @@ async def detect_cutoff_text(
                     const visibleArea = visibleWidth * visibleHeight;
 
                     const visibleRatio = originalArea > 0 ? visibleArea / originalArea : 0;
+                    const horizontalVisibleRatio = contentWidth > 0 ? visibleWidth / contentWidth : 1;
 
                     if (visibleRatio < threshold) {
                         results.push({
                             tag: el.tagName,
                             text: directText.substring(0, 500),
                             visibleRatio: visibleRatio,
+                            horizontalVisibleRatio: horizontalVisibleRatio,
                             boundingRect: {
                                 left: rect.left,
                                 top: rect.top,
@@ -212,22 +180,64 @@ async def detect_cutoff_text(
 
                 return results;
             }
-        """,
-            visibility_threshold,
-        )
+"""
 
-        await browser.close()
 
+def _parse_cutoff_data(cutoff_data: list) -> List[CutoffElement]:
     return [
         CutoffElement(
             tag=item["tag"],
             text=item["text"],
             visible_ratio=item["visibleRatio"],
+            horizontal_visible_ratio=item.get("horizontalVisibleRatio", 1.0),
             bounding_rect=item["boundingRect"],
             clipping_ancestor_tag=item.get("clippingAncestorTag"),
         )
         for item in cutoff_data
     ]
+
+
+async def _detect_cutoff_on_page(
+    page, visibility_threshold: float
+) -> List[CutoffElement]:
+    """Run cutoff detection JS on an already-loaded Playwright page."""
+    cutoff_data = await page.evaluate(_CUTOFF_JS, visibility_threshold)
+    return _parse_cutoff_data(cutoff_data)
+
+
+async def detect_cutoff_text(
+    html_content: str,
+    viewport_width: int,
+    viewport_height: int,
+    visibility_threshold: float = 0.9,
+) -> List[CutoffElement]:
+    """
+    Detect text elements that are cut off due to overflow:hidden or viewport clipping.
+
+    Renders the HTML in a headless browser and checks each text-containing element's
+    bounding box against all ancestor elements that have overflow:hidden. If the
+    element's visible area (after clipping) is less than the threshold fraction of
+    its full area, it is flagged.
+
+    Args:
+        html_content: The HTML string to analyze.
+        viewport_width: Width of the viewport in pixels.
+        viewport_height: Height of the viewport in pixels.
+        visibility_threshold: Elements with visible_ratio below this are flagged (0.0-1.0).
+
+    Returns:
+        List of CutoffElement instances for elements that are significantly cut off.
+    """
+    async with async_playwright() as p:
+        browser = await p.chromium.launch()
+        page = await browser.new_page(
+            viewport={"width": viewport_width, "height": viewport_height}
+        )
+        await page.set_content(html_content, wait_until="load")
+        results = await _detect_cutoff_on_page(page, visibility_threshold)
+        await browser.close()
+
+    return results
 
 
 def has_significant_cutoff(
@@ -238,36 +248,51 @@ def has_significant_cutoff(
     """
     Determine if the detected cutoff elements represent significant content loss.
 
+    Only horizontal clipping (left/right) by overflow:hidden containers is
+    considered significant. Vertical clipping is ignored because PDF scaling
+    handles vertical overflow.
+
     Args:
         cutoff_elements: List of CutoffElement from detect_cutoff_text.
         min_text_length: Minimum text length to consider an element significant.
-        max_visible_ratio: Elements with visible_ratio at or below this are considered
-            significant cutoff (default 0.5 means >50% of the element is hidden).
+        max_visible_ratio: Elements with horizontal_visible_ratio at or below this
+            are considered significant cutoff (default 0.5 means >50% of the
+            element's width is hidden).
 
     Returns:
-        True if there is significant text cutoff that warrants skipping or re-rendering.
+        True if there is significant horizontal text cutoff that warrants
+        skipping or re-rendering.
     """
     for el in cutoff_elements:
-        if len(el.text.strip()) >= min_text_length and el.visible_ratio <= max_visible_ratio:
+        if (
+            len(el.text.strip()) >= min_text_length
+            and el.horizontal_visible_ratio <= max_visible_ratio
+        ):
             return True
     return False
 
 
 def extract_viewport_from_html(html_content: str) -> tuple:
-    """Extract viewport width and height from the HTML body style.
+    """Extract viewport dimensions from the HTML meta viewport tag.
 
-    Looks for width/height in the body CSS rule. Falls back to 1024x768
-    if not found.
+    Parses ``<meta name="viewport" content="width=N, ...">``. Falls back to
+    1024 wide if not found. Height always defaults to 100000 (large value
+    avoids false viewport-clipping on pages that flow naturally).
     """
-    # Try body { ... width: Npx; ... height: Npx; ... }
-    body_match = re.search(r"body\s*\{([^}]*)\}", html_content)
-    width, height = 1024, 768
-    if body_match:
-        body_css = body_match.group(1)
-        w = re.search(r"width\s*:\s*(\d+)px", body_css)
-        h = re.search(r"height\s*:\s*(\d+)px", body_css)
+    width = 1024
+    height = 100000
+    meta_match = re.search(
+        r'<meta\s[^>]*name=["\']viewport["\'][^>]*content=["\']([^"\']*)["\']'
+        r'|<meta\s[^>]*content=["\']([^"\']*)["\'][^>]*name=["\']viewport["\']',
+        html_content,
+        re.IGNORECASE,
+    )
+    if meta_match:
+        content = meta_match.group(1) or meta_match.group(2)
+        w = re.search(r"width\s*=\s*(\d+)", content)
         if w:
             width = int(w.group(1))
+        h = re.search(r"height\s*=\s*(\d+)", content)
         if h:
             height = int(h.group(1))
     return width, height
@@ -284,6 +309,7 @@ async def classify_html_files(
     """Classify HTML files into cutoff / no-cutoff directories.
 
     Files are symlinked (not copied) into the output directories.
+    For cutoff files, a PNG screenshot is saved alongside the symlink.
     """
     os.makedirs(cutoff_dir, exist_ok=True)
     os.makedirs(no_cutoff_dir, exist_ok=True)
@@ -291,41 +317,56 @@ async def classify_html_files(
     n_cutoff = 0
     n_ok = 0
 
-    for path in html_paths:
-        filename = os.path.basename(path)
-        try:
-            with open(path, "r") as f:
-                html_content = f.read()
+    async with async_playwright() as p:
+        browser = await p.chromium.launch()
 
-            vw, vh = extract_viewport_from_html(html_content)
-            elements = await detect_cutoff_text(
-                html_content, vw, vh, visibility_threshold
-            )
-            is_cutoff = has_significant_cutoff(
-                elements, min_text_length, max_visible_ratio
-            )
+        for path in html_paths:
+            filename = os.path.basename(path)
+            try:
+                with open(path, "r") as f:
+                    html_content = f.read()
 
-            if is_cutoff:
-                dest = os.path.join(cutoff_dir, filename)
-                n_cutoff += 1
-            else:
-                dest = os.path.join(no_cutoff_dir, filename)
-                n_ok += 1
+                vw, vh = extract_viewport_from_html(html_content)
+                page = await browser.new_page(
+                    viewport={"width": vw, "height": vh}
+                )
+                await page.set_content(html_content, wait_until="load")
 
-            # Symlink to the original file
-            if os.path.exists(dest) or os.path.islink(dest):
-                os.remove(dest)
-            os.symlink(os.path.abspath(path), dest)
+                elements = await _detect_cutoff_on_page(page, visibility_threshold)
+                is_cutoff = has_significant_cutoff(
+                    elements, min_text_length, max_visible_ratio
+                )
 
-            status = "CUTOFF" if is_cutoff else "ok"
-            detail = ""
-            if is_cutoff:
-                worst = min(elements, key=lambda e: e.visible_ratio)
-                detail = f"  worst: {worst.tag} vis={worst.visible_ratio:.2f} \"{worst.text[:60]}\""
-            print(f"[{status:6s}] {filename}{detail}")
+                if is_cutoff:
+                    dest = os.path.join(cutoff_dir, filename)
+                    n_cutoff += 1
 
-        except Exception as e:
-            print(f"[ERROR ] {filename}: {e}")
+                    # Save a screenshot next to the symlink
+                    png_name = os.path.splitext(filename)[0] + ".png"
+                    png_path = os.path.join(cutoff_dir, png_name)
+                    await page.screenshot(path=png_path, full_page=False)
+                else:
+                    dest = os.path.join(no_cutoff_dir, filename)
+                    n_ok += 1
+
+                await page.close()
+
+                # Symlink to the original file
+                if os.path.exists(dest) or os.path.islink(dest):
+                    os.remove(dest)
+                os.symlink(os.path.abspath(path), dest)
+
+                status = "CUTOFF" if is_cutoff else "ok"
+                detail = ""
+                if is_cutoff:
+                    worst = min(elements, key=lambda e: e.horizontal_visible_ratio)
+                    detail = f"  worst: {worst.tag} hvis={worst.horizontal_visible_ratio:.2f} \"{worst.text[:60]}\""
+                print(f"[{status:6s}] {filename}{detail}")
+
+            except Exception as e:
+                print(f"[ERROR ] {filename}: {e}")
+
+        await browser.close()
 
     print(f"\nDone. cutoff={n_cutoff}  ok={n_ok}  total={n_cutoff + n_ok}")
 

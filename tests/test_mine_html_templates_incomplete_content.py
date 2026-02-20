@@ -273,10 +273,10 @@ class TestIncompleteContent(unittest.TestCase):
 </html>"""
 
         with tempfile.TemporaryDirectory() as td:
-            rendered = asyncio.run(render_pdf_with_playwright(html, os.path.join(td, "temp.pdf"), 768, 1024))
+            result = asyncio.run(render_pdf_with_playwright(html, os.path.join(td, "temp.pdf"), 768, 1024))
 
         # Somehow we need to error out and show that this page didn't render fully
-        self.assertFalse(rendered)
+        self.assertFalse(result.success)
 
 
 if __name__ == "__main__":

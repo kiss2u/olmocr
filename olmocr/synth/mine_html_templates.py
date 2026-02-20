@@ -38,6 +38,11 @@ from olmocr.data.renderpdf import (
     render_pdf_to_base64png,
 )
 from olmocr.filter.filter import Language, PdfFilter
+from olmocr.synth.cutoff_detection import (
+    RenderResult,
+    _detect_cutoff_on_page,
+    has_significant_cutoff,
+)
 from olmocr.synth.claude_client import (
     DEFAULT_MODEL_NAME,
     call_claude,
@@ -528,9 +533,9 @@ async def generate_html_from_image(client, image_base64):
 
         try:
             # Render HTML to PDF using existing function
-            render_success = await render_pdf_with_playwright(initial_html, tmp_pdf_path, png_width, png_height)
+            render_result = await render_pdf_with_playwright(initial_html, tmp_pdf_path, png_width, png_height)
 
-            if not render_success:
+            if not render_result.success:
                 print("Warning: Failed to render initial HTML to PDF for refinement")
                 return None
 
@@ -678,10 +683,33 @@ def extract_page_from_pdf(input_path, output_path, page_num):
         return False
 
 
+async def _load_katex_on_page(page):
+    """Load KaTeX CSS/JS and run auto-render on an already-loaded Playwright page."""
+    katex_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "bench", "katex")
+    katex_css_path = os.path.join(katex_dir, "katex.min.css")
+    katex_js_path = os.path.join(katex_dir, "katex.min.js")
+    katex_autorender_js_path = os.path.join(katex_dir, "auto-render.min.js")
+
+    await page.add_style_tag(path=katex_css_path)
+    await page.add_script_tag(path=katex_js_path)
+    await page.add_script_tag(path=katex_autorender_js_path)
+
+    await page.evaluate("""
+        renderMathInElement(document.body, {
+            delimiters: [
+                {left: '\\\\(', right: '\\\\)', display: false},
+                {left: '\\\\[', right: '\\\\]', display: true}
+            ],
+            throwOnError: false
+        });
+    """)
+
+
 async def render_pdf_with_playwright(html_content, output_pdf_path, png_width, png_height):
     """
     Render HTML content using Playwright and save it as PDF.
-    Try different scale factors if needed to ensure the output is exactly one page.
+    First checks for text cutoff (overflow clipping), then tries different
+    scale factors if needed to ensure the output is exactly one page.
 
     Args:
         html_content: HTML content to render
@@ -690,97 +718,94 @@ async def render_pdf_with_playwright(html_content, output_pdf_path, png_width, p
         png_height: Height of the viewport
 
     Returns:
-        bool: True if rendering was successful with exactly one page, False otherwise
+        RenderResult with success, scale_used, cutoff info
     """
-    scale_factors = [1.0, 0.9, 0.8, 0.7, 0.6, 0.5]  # Try these scale factors in order
+    scale_factors = [1.0, 0.9, 0.8, 0.7, 0.6, 0.5]
 
     # Determine page format based on PNG dimensions
-    # Define thresholds with some tolerance (±5%)
     aspect_ratio = png_width / png_height
-
-    # Letter Portrait: 8.5" x 11" (aspect ratio ~0.77)
-    # Letter Landscape: 11" x 8.5" (aspect ratio ~1.29)
-    # A4 Portrait: 210mm x 297mm (aspect ratio ~0.71)
-    # A4 Landscape: 297mm x 210mm (aspect ratio ~1.41)
 
     pdf_options = {
         "path": output_pdf_path,
         "print_background": True,
     }
 
-    if 0.73 <= aspect_ratio <= 0.81:  # Letter Portrait (8.5/11 = 0.77)
+    if 0.73 <= aspect_ratio <= 0.81:  # Letter Portrait
         pdf_options["width"] = "8.5in"
         pdf_options["height"] = "11in"
-    elif 1.23 <= aspect_ratio <= 1.35:  # Letter Landscape (11/8.5 = 1.29)
+    elif 1.23 <= aspect_ratio <= 1.35:  # Letter Landscape
         pdf_options["width"] = "11in"
         pdf_options["height"] = "8.5in"
-    elif 0.67 <= aspect_ratio <= 0.73:  # A4 Portrait (210/297 = 0.71)
+    elif 0.67 <= aspect_ratio <= 0.73:  # A4 Portrait
         pdf_options["width"] = "210mm"
         pdf_options["height"] = "297mm"
-    elif 1.36 <= aspect_ratio <= 1.47:  # A4 Landscape (297/210 = 1.41)
+    elif 1.36 <= aspect_ratio <= 1.47:  # A4 Landscape
         pdf_options["width"] = "297mm"
         pdf_options["height"] = "210mm"
-    # else: Other - leave width and height unset
 
-    for scale in scale_factors:
+    async with async_playwright() as p:
+        browser = await p.chromium.launch()
+
         try:
-            async with async_playwright() as p:
-                browser = await p.chromium.launch()
-                page = await browser.new_page(viewport={"width": int(png_width * scale), "height": int(png_height * scale)})
+            # Phase 1: Cutoff detection at original viewport size
+            check_page = await browser.new_page(
+                viewport={"width": png_width, "height": png_height}
+            )
+            await check_page.set_content(html_content, wait_until="load")
+            await _load_katex_on_page(check_page)
 
-                # Set the HTML content
-                await page.set_content(html_content)
+            cutoff_elements = await _detect_cutoff_on_page(check_page, 0.9)
+            await check_page.close()
 
-                # Add in katex and setup auto rendering
-                katex_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "bench", "katex")
-                katex_css_path = os.path.join(katex_dir, "katex.min.css")
-                katex_js_path = os.path.join(katex_dir, "katex.min.js")
-                katex_autorender_js_path = os.path.join(katex_dir, "auto-render.min.js")
-
-                await page.add_style_tag(path=katex_css_path)
-                await page.add_script_tag(path=katex_js_path)
-                await page.add_script_tag(path=katex_autorender_js_path)
-
-                # Run the KaTeX auto-renderer immediately rather than waiting for DOMContentLoaded
-                await page.evaluate("""
-                    renderMathInElement(document.body, {
-                        // customised options
-                        // • auto-render specific keys, e.g.:
-                        delimiters: [
-                            {left: '\\\\(', right: '\\\\)', display: false},
-                            {left: '\\\\[', right: '\\\\]', display: true}
-                        ],
-                        // • rendering keys, e.g.:
-                        throwOnError: false
-                    });
-                """)
-
-                # Save as PDF with formatting options
-                # Add scale to the options
-                pdf_options["scale"] = scale
-                await page.pdf(**pdf_options)
-
+            if has_significant_cutoff(cutoff_elements):
                 await browser.close()
+                return RenderResult(
+                    success=False,
+                    cutoff_elements=cutoff_elements,
+                    has_cutoff=True,
+                )
 
-                # Check if the output PDF has exactly one page
+            # Phase 2: Scale loop — render PDF, check page count
+            for scale in scale_factors:
                 try:
-                    reader = pypdf.PdfReader(output_pdf_path)
-                    if len(reader.pages) == 1:
-                        print(f"Successfully rendered as a single page PDF with scale factor {scale}")
-                        return True
-                    else:
-                        print(f"PDF has {len(reader.pages)} pages with scale factor {scale}, trying a smaller scale...")
-                        # Continue to the next scale factor
-                except Exception as pdf_check_error:
-                    print(f"Error checking PDF page count: {pdf_check_error}")
-                    return False
+                    page = await browser.new_page(
+                        viewport={
+                            "width": int(png_width * scale),
+                            "height": int(png_height * scale),
+                        }
+                    )
+                    await page.set_content(html_content)
+                    await _load_katex_on_page(page)
+
+                    pdf_options["scale"] = scale
+                    await page.pdf(**pdf_options)
+                    await page.close()
+
+                    try:
+                        reader = pypdf.PdfReader(output_pdf_path)
+                        if len(reader.pages) == 1:
+                            print(f"Successfully rendered as a single page PDF with scale factor {scale}")
+                            await browser.close()
+                            return RenderResult(success=True, scale_used=scale)
+                        else:
+                            print(f"PDF has {len(reader.pages)} pages with scale factor {scale}, trying a smaller scale...")
+                    except Exception as pdf_check_error:
+                        print(f"Error checking PDF page count: {pdf_check_error}")
+                        await browser.close()
+                        return RenderResult(success=False)
+
+                except Exception as e:
+                    print(f"Error rendering PDF with Playwright at scale {scale}: {str(e)}")
 
         except Exception as e:
-            print(f"Error rendering PDF with Playwright at scale {scale}: {str(e)}")
-            # Try the next scale factor
+            print(f"Error during render_pdf_with_playwright: {str(e)}")
+            await browser.close()
+            return RenderResult(success=False)
+
+        await browser.close()
 
     print("Failed to render PDF as a single page with any scale factor")
-    return False
+    return RenderResult(success=False)
 
 
 def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, random_gen: random.Random, verbose_table_testing: bool = False) -> List[Dict]:
@@ -1900,7 +1925,7 @@ async def process_pdf(pdf_info, args, client, pdf_filter=None, existing_test_pdf
 
         # Render PDF using Playwright
         playwright_pdf_path = None
-        render_success = False
+        render_result = None
         playwright_pdf_filename = f"{pdf_id}_page{page_num}.pdf"  # This will be used in the tests
 
         playwright_pdf_path = os.path.join(pdfs_dir, playwright_pdf_filename)
@@ -1910,9 +1935,9 @@ async def process_pdf(pdf_info, args, client, pdf_filter=None, existing_test_pdf
             png_width, png_height = get_png_dimensions_from_base64(image_base64)
 
             # Run the async function directly since we're already in an async context
-            render_success = await render_pdf_with_playwright(html_content, playwright_pdf_path, png_width, png_height)
+            render_result = await render_pdf_with_playwright(html_content, playwright_pdf_path, png_width, png_height)
 
-            if render_success:
+            if render_result.success:
                 print(f"Successfully rendered with Playwright: {playwright_pdf_path}")
 
                 # Apply JPEG compression if requested
@@ -1935,15 +1960,18 @@ async def process_pdf(pdf_info, args, client, pdf_filter=None, existing_test_pdf
                         print(f"Warning: Failed to apply JPEG compression, keeping original PDF")
 
             else:
-                print(f"Failed to render as a single page PDF: {playwright_pdf_path}")
+                if render_result.has_cutoff:
+                    print(f"Skipping: text cutoff detected in {playwright_pdf_path}")
+                else:
+                    print(f"Failed to render as a single page PDF: {playwright_pdf_path}")
                 playwright_pdf_path = None
         except Exception as e:
             print(f"Failed to render with Playwright: {e}")
             playwright_pdf_path = None
-            render_success = False
+            render_result = None
 
         # If playwright rendering failed and was required, return None to skip the rest of the output here
-        if not render_success:
+        if not render_result or not render_result.success:
             return None
 
         # Save HTML to output directory

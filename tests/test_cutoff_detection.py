@@ -1,11 +1,16 @@
 import asyncio
+import os
+import tempfile
 import unittest
 
 from olmocr.synth.cutoff_detection import (
     CutoffElement,
+    RenderResult,
     detect_cutoff_text,
+    extract_viewport_from_html,
     has_significant_cutoff,
 )
+from olmocr.synth.mine_html_templates import render_pdf_with_playwright
 
 
 class TestDetectCutoffText(unittest.TestCase):
@@ -335,21 +340,34 @@ class TestHasSignificantCutoff(unittest.TestCase):
     def test_short_text_not_significant(self):
         """Very short clipped text (e.g., a period or dash) is not significant."""
         elements = [
-            CutoffElement(tag="SPAN", text=".", visible_ratio=0.0),
-            CutoffElement(tag="SPAN", text="-", visible_ratio=0.0),
+            CutoffElement(tag="SPAN", text=".", visible_ratio=0.0, horizontal_visible_ratio=0.0),
+            CutoffElement(tag="SPAN", text="-", visible_ratio=0.0, horizontal_visible_ratio=0.0),
         ]
         self.assertFalse(has_significant_cutoff(elements, min_text_length=3))
 
     def test_long_text_significantly_cutoff(self):
-        """Long text that is mostly hidden is significant."""
+        """Long text that is mostly hidden horizontally is significant."""
         elements = [
             CutoffElement(
                 tag="TH",
                 text=">12 weeks OR (95% CI)",
                 visible_ratio=0.1,
+                horizontal_visible_ratio=0.1,
             ),
         ]
         self.assertTrue(has_significant_cutoff(elements))
+
+    def test_long_text_vertical_only_not_significant(self):
+        """Text clipped only vertically should NOT be flagged (PDF scaling handles it)."""
+        elements = [
+            CutoffElement(
+                tag="TD",
+                text="Required Units for the Major:",
+                visible_ratio=0.0,
+                horizontal_visible_ratio=1.0,  # full width visible, just vertically clipped
+            ),
+        ]
+        self.assertFalse(has_significant_cutoff(elements))
 
     def test_long_text_barely_cutoff_not_significant(self):
         """Long text that is mostly visible (e.g., 80%) is not significant at default threshold."""
@@ -358,6 +376,7 @@ class TestHasSignificantCutoff(unittest.TestCase):
                 tag="P",
                 text="Some paragraph text that is mostly visible",
                 visible_ratio=0.8,
+                horizontal_visible_ratio=0.8,
             ),
         ]
         # Default max_visible_ratio is 0.5, so 0.8 should not be significant
@@ -369,6 +388,7 @@ class TestHasSignificantCutoff(unittest.TestCase):
                 tag="TD",
                 text="Value C1",
                 visible_ratio=0.6,
+                horizontal_visible_ratio=0.6,
             ),
         ]
         # At default threshold (0.5), 0.6 is NOT significant
@@ -377,13 +397,106 @@ class TestHasSignificantCutoff(unittest.TestCase):
         self.assertTrue(has_significant_cutoff(elements, max_visible_ratio=0.7))
 
     def test_mixed_elements(self):
-        """Only needs one significant element to return True."""
+        """Only needs one significant element with horizontal cutoff to return True."""
         elements = [
-            CutoffElement(tag="P", text="Visible", visible_ratio=0.95),
-            CutoffElement(tag="SPAN", text=".", visible_ratio=0.0),  # too short
-            CutoffElement(tag="TH", text="All weeks OR (95% CI)", visible_ratio=0.0),
+            CutoffElement(tag="P", text="Visible", visible_ratio=0.95, horizontal_visible_ratio=0.95),
+            CutoffElement(tag="SPAN", text=".", visible_ratio=0.0, horizontal_visible_ratio=0.0),  # too short
+            CutoffElement(tag="TH", text="All weeks OR (95% CI)", visible_ratio=0.0, horizontal_visible_ratio=0.0),
         ]
         self.assertTrue(has_significant_cutoff(elements))
+
+
+class TestExtractViewportFromHtml(unittest.TestCase):
+    """Tests for extract_viewport_from_html."""
+
+    def test_explicit_width_and_height(self):
+        html = '<html><head><meta name="viewport" content="width=800, height=600"/></head><body></body></html>'
+        w, h = extract_viewport_from_html(html)
+        self.assertEqual(w, 800)
+        self.assertEqual(h, 600)
+
+    def test_width_only_height_fallback_large(self):
+        """When only width is set, height should fall back to 100000."""
+        html = '<html><head><meta name="viewport" content="width=1024, initial-scale=1.0"/></head><body></body></html>'
+        w, h = extract_viewport_from_html(html)
+        self.assertEqual(w, 1024)
+        self.assertEqual(h, 100000)
+
+    def test_content_before_name(self):
+        """Meta tag with content attr before name attr (both orderings appear in the wild)."""
+        html = '<html><head><meta content="width=792, initial-scale=1.0" name="viewport"/></head><body></body></html>'
+        w, h = extract_viewport_from_html(html)
+        self.assertEqual(w, 792)
+        self.assertEqual(h, 100000)
+
+    def test_no_viewport_meta(self):
+        """No viewport meta tag — both width and height use defaults."""
+        html = '<html><head></head><body><p>Hello</p></body></html>'
+        w, h = extract_viewport_from_html(html)
+        self.assertEqual(w, 1024)
+        self.assertEqual(h, 100000)
+
+    def test_no_false_positive_without_body_height(self):
+        """Content at y>768 with no body height should NOT be flagged as viewport-clipped."""
+        html = """<!DOCTYPE html>
+<html><head><style>
+body { margin: 0; width: 600px; }
+</style></head>
+<body>
+<div style="height: 900px;">Spacer</div>
+<p>This footer text is below y=768 but should NOT be flagged</p>
+</body></html>"""
+        vw, vh = extract_viewport_from_html(html)
+        # vh should be 100000, so the footer is well within viewport
+        results = asyncio.run(detect_cutoff_text(html, vw, vh))
+        flagged_texts = [r.text for r in results]
+        self.assertFalse(
+            any("footer" in t.lower() for t in flagged_texts),
+            f"Footer should NOT be flagged with large viewport height, got: {flagged_texts}",
+        )
+
+
+class TestRenderWithCutoffDetection(unittest.TestCase):
+    """Integration tests for render_pdf_with_playwright with cutoff detection."""
+
+    def test_html_with_overflow_cutoff_is_rejected(self):
+        """HTML with significant overflow:hidden clipping should be rejected."""
+        html = """<!DOCTYPE html>
+<html><head><style>
+body { margin: 0; width: 400px; height: 600px; }
+.container { width: 100px; overflow: hidden; white-space: nowrap; }
+</style></head>
+<body>
+<div class="container">
+    <p>This is a very long sentence that will definitely overflow the narrow container and get clipped by overflow hidden</p>
+</div>
+</body></html>"""
+        with tempfile.TemporaryDirectory() as td:
+            result = asyncio.run(
+                render_pdf_with_playwright(html, os.path.join(td, "test.pdf"), 400, 600)
+            )
+        self.assertFalse(result.success)
+        self.assertTrue(result.has_cutoff)
+        self.assertGreater(len(result.cutoff_elements), 0)
+
+    def test_clean_html_renders_successfully(self):
+        """Clean HTML without clipping should render to a single-page PDF."""
+        html = """<!DOCTYPE html>
+<html><head><style>
+body { margin: 0; padding: 10px; width: 400px; }
+</style></head>
+<body>
+<h1>Hello World</h1>
+<p>This is a simple page with no overflow clipping issues.</p>
+</body></html>"""
+        with tempfile.TemporaryDirectory() as td:
+            pdf_path = os.path.join(td, "test.pdf")
+            result = asyncio.run(
+                render_pdf_with_playwright(html, pdf_path, 400, 600)
+            )
+        self.assertTrue(result.success)
+        self.assertFalse(result.has_cutoff)
+        self.assertIsNotNone(result.scale_used)
 
 
 if __name__ == "__main__":
