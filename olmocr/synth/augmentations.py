@@ -1,5 +1,9 @@
 import os
+import random
+import re
+from typing import Dict, List, Tuple
 
+from bs4 import BeautifulSoup, NavigableString, Tag
 from PIL import Image
 
 from olmocr.synth.claude_client import (
@@ -124,3 +128,103 @@ def apply_jpeg_compression(pdf_path, quality, temp_dir):
     except Exception as e:
         print(f"Error applying JPEG compression: {e}")
         return False
+
+
+_SKIP_ANCESTORS = frozenset({"header", "footer", "table", "thead", "tbody", "tfoot", "tr", "td", "th",
+                              "h1", "h2", "h3", "h4", "h5", "h6", "sup", "sub",
+                              "script", "style", "code", "pre"})
+_SKIP_CLASSES = frozenset({"page-header", "page-footer", "page-number"})
+
+
+def _has_skip_ancestor(node):
+    """Return True if any ancestor of *node* should be excluded from typo injection."""
+    for parent in node.parents:
+        if parent.name in _SKIP_ANCESTORS:
+            return True
+        parent_classes = parent.get("class", []) if hasattr(parent, "get") else []
+        if any(c in _SKIP_CLASSES for c in parent_classes):
+            return True
+    return False
+
+
+def _apply_typo(word: str, rng: random.Random) -> str:
+    """Apply a random typo to *word*, preserving the first and last character.
+
+    Strategies:
+      - swap:  swap two adjacent interior characters
+      - delete: remove a random interior character
+      - duplicate: double a random interior character
+    """
+    # Interior indices: 1 .. len(word)-2
+    interior_len = len(word) - 2
+    if interior_len < 1:
+        return word  # too short to mutate safely
+
+    strategy = rng.choice(["swap", "delete", "duplicate"])
+    chars = list(word)
+
+    if strategy == "swap" and interior_len >= 2:
+        i = rng.randint(1, len(word) - 3)  # i and i+1 are both interior
+        chars[i], chars[i + 1] = chars[i + 1], chars[i]
+    elif strategy == "delete":
+        i = rng.randint(1, len(word) - 2)
+        del chars[i]
+    else:  # duplicate (also fallback when swap needs >=2 interior chars)
+        i = rng.randint(1, len(word) - 2)
+        chars.insert(i, chars[i])
+
+    return "".join(chars)
+
+
+def introduce_text_errors(html_content: str, random_gen: random.Random, num_errors: int = 5) -> Tuple[str, List[Dict[str, str]]]:
+    """Introduce intentional typos into body text of *html_content*.
+
+    Returns (modified_html, typo_records) where each record is
+    ``{"original_word": ..., "typo_word": ...}``.
+    """
+    soup = BeautifulSoup(html_content, "html.parser")
+    body = soup.find("body")
+    if not body or not isinstance(body, Tag):
+        return html_content, []
+
+    # Collect candidate (text_node, word, start, end) tuples
+    _WORD_RE = re.compile(r"[A-Za-z]+")
+    candidates = []
+
+    for text_node in body.find_all(string=True):
+        if not isinstance(text_node, NavigableString):
+            continue
+        if _has_skip_ancestor(text_node):
+            continue
+        text = str(text_node)
+        for m in _WORD_RE.finditer(text):
+            word = m.group()
+            if len(word) >= 5 and word.isascii():
+                candidates.append((text_node, word, m.start(), m.end()))
+
+    if not candidates:
+        return html_content, []
+
+    random_gen.shuffle(candidates)
+    selected = candidates[:num_errors]
+
+    # Group selected candidates by text node so we can replace right-to-left
+    from collections import defaultdict
+    node_edits: Dict[NavigableString, list] = defaultdict(list)
+    typo_records: List[Dict[str, str]] = []
+
+    for text_node, word, start, end in selected:
+        typo = _apply_typo(word, random_gen)
+        if typo == word:
+            continue
+        node_edits[text_node].append((start, end, typo))
+        typo_records.append({"original_word": word, "typo_word": typo})
+
+    # Apply edits right-to-left within each node to preserve positions
+    for text_node, edits in node_edits.items():
+        text = str(text_node)
+        for start, end, typo in sorted(edits, key=lambda e: e[0], reverse=True):
+            text = text[:start] + typo + text[end:]
+        text_node.replace_with(NavigableString(text))
+
+    return str(soup), typo_records

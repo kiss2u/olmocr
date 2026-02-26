@@ -1893,6 +1893,14 @@ async def process_pdf(pdf_info, args, client, pdf_filter=None, existing_test_pdf
                 print(f"Failed to densify HTML for {pdf_path}, page {page_num}")
                 return None
 
+        typo_records = []
+        pre_typo_html = None
+        if args.introduce_text_errors > 0:
+            from olmocr.synth.augmentations import introduce_text_errors
+
+            pre_typo_html = html_content
+            html_content, typo_records = introduce_text_errors(html_content, random_generator, num_errors=args.introduce_text_errors)
+
         # Add git commit meta tag if available
         git_commit = get_git_commit_hash()
         if git_commit:
@@ -2026,6 +2034,45 @@ async def process_pdf(pdf_info, args, client, pdf_filter=None, existing_test_pdf
         for test in tests:
             test["pdf"] = f"{args.name}/{playwright_pdf_filename}"
 
+        if args.introduce_text_errors > 0 and typo_records and pre_typo_html is not None:
+            original_markdown = html_to_markdown_with_frontmatter(pre_typo_html)
+            augmented_markdown = html_to_markdown_with_frontmatter(html_content)
+
+            # Remove any existing presence tests that match typo words
+            # (generate_tests_from_html may tag them as rare words)
+            typo_words = {r["typo_word"] for r in typo_records}
+            tests = [t for t in tests if not (t.get("type") == TestType.PRESENT.value and t.get("text") in typo_words)]
+
+            for record in typo_records:
+                typo_word = record["typo_word"]
+
+                test_id = f"{pdf_id}_typo_{uuid.uuid4().hex[:8]}"
+                test_data = {
+                    "pdf": f"{args.name}/{playwright_pdf_filename}",
+                    "page": 1,
+                    "id": test_id,
+                    "type": TestType.PRESENT.value,
+                    "text": typo_word,
+                    "max_diffs": 0,
+                }
+
+                test_obj = TextPresenceTest(
+                    pdf=test_data["pdf"],
+                    page=1,
+                    id=test_id,
+                    type=TestType.PRESENT.value,
+                    text=typo_word,
+                    max_diffs=0,
+                )
+
+                # Must FAIL against original (typo shouldn't exist before)
+                passed_original, _ = test_obj.run(original_markdown)
+                # Must PASS against augmented (typo should exist after)
+                passed_augmented, _ = test_obj.run(augmented_markdown)
+
+                if not passed_original and passed_augmented:
+                    tests.append(test_data)
+
         # Log table test stats if verbose
         if verbose_table_testing:
             table_tests = [t for t in tests if t["type"] == TestType.TABLE.value]
@@ -2067,6 +2114,7 @@ async def main():
     parser.add_argument("--verbose", action="store_true", help="Enable verbose output including table test verification")
     parser.add_argument("--densify", action="store_true", help="Set to ask claude to double the density of information on this page synthetically")
     parser.add_argument("--jpegify", action="store_true", help="Apply JPEG compression to rendered PDFs with random quality (70-95)")
+    parser.add_argument("--introduce-text-errors", type=int, default=0, help="Introduce N intentional typos into HTML body text and generate corresponding presence tests")
     parser.add_argument("--filter", action="store_true", help="Apply PDF filtering to remove forms, spam, and non-English content")
     parser.add_argument("--name", default="synthetic", help="Name for the output JSONL file and subfolder (default: synthetic)")
     args = parser.parse_args()
