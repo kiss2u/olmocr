@@ -237,38 +237,41 @@ _OCCLUSION_JS = """
                     directText = directText.trim();
                     if (!directText || directText.length < 3) continue;
 
-                    // Sample 5 points across the element
+                    // Sample a grid of points across the element
                     const inset = 2;
-                    const pts = [
-                        [rect.left + rect.width / 2, rect.top + rect.height / 2],
-                        [rect.left + inset, rect.top + inset],
-                        [rect.right - inset, rect.top + inset],
-                        [rect.left + inset, rect.bottom - inset],
-                        [rect.right - inset, rect.bottom - inset],
-                    ];
-
+                    const cols = Math.max(2, Math.min(5, Math.ceil(rect.width / 20)));
+                    const rows = Math.max(2, Math.min(4, Math.ceil(rect.height / 20)));
+                    let totalPoints = 0;
                     let occludedCount = 0;
                     let blockerTag = null;
-                    for (const [px, py] of pts) {
-                        if (px < 0 || py < 0) continue;
-                        const topEl = document.elementFromPoint(px, py);
-                        if (!topEl) continue;
-                        if (topEl === el || isRelated(topEl, el)) continue;
 
-                        const alpha = parseAlpha(getComputedStyle(topEl).backgroundColor);
-                        if (alpha > 0.5) {
-                            occludedCount++;
-                            if (!blockerTag) blockerTag = topEl.tagName;
+                    for (let r = 0; r < rows; r++) {
+                        const py = rect.top + inset + (rect.height - 2 * inset) * r / (rows - 1);
+                        for (let c = 0; c < cols; c++) {
+                            const px = rect.left + inset + (rect.width - 2 * inset) * c / (cols - 1);
+                            if (px < 0 || py < 0) continue;
+                            totalPoints++;
+                            const topEl = document.elementFromPoint(px, py);
+                            if (!topEl) continue;
+                            if (topEl === el || isRelated(topEl, el)) continue;
+
+                            const alpha = parseAlpha(getComputedStyle(topEl).backgroundColor);
+                            if (alpha > 0.5) {
+                                occludedCount++;
+                                if (!blockerTag) blockerTag = topEl.tagName;
+                            }
                         }
                     }
 
-                    // Flag if majority of sample points (3+/5) are occluded
-                    if (occludedCount >= 3) {
+                    // Flag if >= 20% of sample points are occluded
+                    const occlusionRatio = totalPoints > 0 ? occludedCount / totalPoints : 0;
+                    if (occlusionRatio >= 0.2) {
                         results.push({
                             tag: el.tagName,
                             text: directText.substring(0, 500),
                             occludedPoints: occludedCount,
-                            totalPoints: 5,
+                            totalPoints: totalPoints,
+                            occlusionRatio: occlusionRatio,
                             blockerTag: blockerTag,
                             boundingRect: {
                                 left: rect.left,
