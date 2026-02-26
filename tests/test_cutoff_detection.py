@@ -456,6 +456,80 @@ body { margin: 0; width: 600px; }
         )
 
 
+class TestOcclusionDetection(unittest.TestCase):
+    """Tests for detection of text occluded by opaque overlapping elements."""
+
+    def test_opaque_box_covering_text(self):
+        """An opaque positioned element covering text should be detected."""
+        html = """<!DOCTYPE html>
+<html><head><style>
+body { margin: 0; width: 400px; height: 300px; position: relative; }
+.text-layer { position: absolute; top: 50px; left: 20px; }
+.cover-box {
+    position: absolute;
+    top: 40px; left: 10px;
+    width: 300px; height: 60px;
+    background: #cccccc;
+    z-index: 10;
+}
+</style></head>
+<body>
+<p class="text-layer">This important text is hidden behind an opaque box</p>
+<div class="cover-box"></div>
+</body></html>"""
+        results = asyncio.run(detect_cutoff_text(html, 400, 300))
+        occluded = [r for r in results if r.is_occluded]
+        self.assertGreater(len(occluded), 0, f"Should detect occluded text, got: {results}")
+        self.assertTrue(
+            any("important text" in r.text for r in occluded),
+            f"Expected occluded text, got: {[r.text for r in occluded]}",
+        )
+
+    def test_transparent_watermark_not_flagged(self):
+        """Semi-transparent watermark should NOT be flagged as occlusion."""
+        html = """<!DOCTYPE html>
+<html><head><style>
+body { margin: 0; width: 400px; height: 300px; position: relative; }
+.watermark {
+    position: absolute;
+    top: 10px; left: 10px;
+    width: 380px; height: 280px;
+    background: rgba(200, 200, 200, 0.1);
+    z-index: 10;
+    pointer-events: none;
+}
+</style></head>
+<body>
+<p>This text has a transparent watermark overlay but should still be visible</p>
+<div class="watermark"></div>
+</body></html>"""
+        results = asyncio.run(detect_cutoff_text(html, 400, 300))
+        occluded = [r for r in results if r.is_occluded]
+        self.assertEqual(
+            len(occluded), 0,
+            f"Transparent watermark should not flag occlusion, got: {[r.text for r in occluded]}",
+        )
+
+    def test_has_significant_cutoff_with_occlusion(self):
+        """has_significant_cutoff should return True for occluded elements."""
+        elements = [
+            CutoffElement(
+                tag="P",
+                text="Important covered text",
+                visible_ratio=0.4,
+                is_occluded=True,
+            ),
+        ]
+        self.assertTrue(has_significant_cutoff(elements))
+
+    def test_has_significant_cutoff_short_occluded_text(self):
+        """Short occluded text (< min_text_length) should not be significant."""
+        elements = [
+            CutoffElement(tag="SPAN", text="ab", visible_ratio=0.0, is_occluded=True),
+        ]
+        self.assertFalse(has_significant_cutoff(elements, min_text_length=3))
+
+
 class TestRenderWithCutoffDetection(unittest.TestCase):
     """Integration tests for render_pdf_with_playwright with cutoff detection."""
 

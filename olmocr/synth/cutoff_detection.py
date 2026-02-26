@@ -1,8 +1,10 @@
-"""Detection of text content that is cut off or hidden due to overflow clipping in rendered HTML.
+"""Detection of text content that is cut off or hidden in rendered HTML.
 
-When HTML pages are rendered to PDF using Playwright, elements contained in ancestors
-with overflow:hidden can be clipped, making text invisible in the final output. This
-module provides utilities to detect such clipped content.
+Detects two types of hidden content:
+1. Overflow clipping: text inside ancestors with overflow:hidden gets clipped.
+2. Occlusion: opaque elements positioned on top of text, hiding it.
+
+Watermarks and semi-transparent overlays (alpha <= 0.5) are ignored.
 """
 
 import argparse
@@ -24,6 +26,7 @@ class CutoffElement:
     text: str
     visible_ratio: float  # 0.0 = fully hidden, 1.0 = fully visible
     horizontal_visible_ratio: float = 1.0  # fraction of width visible after clipping
+    is_occluded: bool = False  # True if covered by an opaque non-ancestor element
     bounding_rect: dict = field(default_factory=dict)
     clipping_ancestor_tag: Optional[str] = None
 
@@ -183,6 +186,107 @@ _CUTOFF_JS = """
 """
 
 
+_OCCLUSION_JS = """
+            () => {
+                const results = [];
+
+                function getLeafTextElements(root) {
+                    const leaves = [];
+                    function walk(el) {
+                        const style = getComputedStyle(el);
+                        if (style.display === 'none' || style.visibility === 'hidden') return;
+                        let hasDirectText = false;
+                        for (const child of el.childNodes) {
+                            if (child.nodeType === Node.TEXT_NODE && child.textContent.trim()) {
+                                hasDirectText = true;
+                                break;
+                            }
+                        }
+                        if (hasDirectText) leaves.push(el);
+                        for (const child of el.children) walk(child);
+                    }
+                    walk(root);
+                    return leaves;
+                }
+
+                function isRelated(a, b) {
+                    let cur = a.parentElement;
+                    while (cur) { if (cur === b) return true; cur = cur.parentElement; }
+                    cur = b.parentElement;
+                    while (cur) { if (cur === a) return true; cur = cur.parentElement; }
+                    return false;
+                }
+
+                function parseAlpha(bgColor) {
+                    if (!bgColor || bgColor === 'rgba(0, 0, 0, 0)' || bgColor === 'transparent') return 0;
+                    const m = bgColor.match(/rgba\\((\\d+),\\s*(\\d+),\\s*(\\d+),\\s*([\\d.]+)\\)/);
+                    if (m) return parseFloat(m[4]);
+                    if (bgColor.startsWith('rgb(')) return 1;
+                    return 0;
+                }
+
+                const elements = getLeafTextElements(document.body);
+                for (const el of elements) {
+                    const rect = el.getBoundingClientRect();
+                    if (rect.width <= 0 || rect.height <= 0) continue;
+
+                    let directText = '';
+                    for (const child of el.childNodes) {
+                        if (child.nodeType === Node.TEXT_NODE) directText += child.textContent;
+                    }
+                    directText = directText.trim();
+                    if (!directText || directText.length < 3) continue;
+
+                    // Sample 5 points across the element
+                    const inset = 2;
+                    const pts = [
+                        [rect.left + rect.width / 2, rect.top + rect.height / 2],
+                        [rect.left + inset, rect.top + inset],
+                        [rect.right - inset, rect.top + inset],
+                        [rect.left + inset, rect.bottom - inset],
+                        [rect.right - inset, rect.bottom - inset],
+                    ];
+
+                    let occludedCount = 0;
+                    let blockerTag = null;
+                    for (const [px, py] of pts) {
+                        if (px < 0 || py < 0) continue;
+                        const topEl = document.elementFromPoint(px, py);
+                        if (!topEl) continue;
+                        if (topEl === el || isRelated(topEl, el)) continue;
+
+                        const alpha = parseAlpha(getComputedStyle(topEl).backgroundColor);
+                        if (alpha > 0.5) {
+                            occludedCount++;
+                            if (!blockerTag) blockerTag = topEl.tagName;
+                        }
+                    }
+
+                    // Flag if majority of sample points (3+/5) are occluded
+                    if (occludedCount >= 3) {
+                        results.push({
+                            tag: el.tagName,
+                            text: directText.substring(0, 500),
+                            occludedPoints: occludedCount,
+                            totalPoints: 5,
+                            blockerTag: blockerTag,
+                            boundingRect: {
+                                left: rect.left,
+                                top: rect.top,
+                                right: rect.right,
+                                bottom: rect.bottom,
+                                width: rect.width,
+                                height: rect.height
+                            }
+                        });
+                    }
+                }
+
+                return results;
+            }
+"""
+
+
 def _parse_cutoff_data(cutoff_data: list) -> List[CutoffElement]:
     return [
         CutoffElement(
@@ -197,12 +301,28 @@ def _parse_cutoff_data(cutoff_data: list) -> List[CutoffElement]:
     ]
 
 
+def _parse_occlusion_data(occlusion_data: list) -> List[CutoffElement]:
+    return [
+        CutoffElement(
+            tag=item["tag"],
+            text=item["text"],
+            visible_ratio=1.0 - item["occludedPoints"] / item["totalPoints"],
+            horizontal_visible_ratio=1.0,
+            is_occluded=True,
+            bounding_rect=item["boundingRect"],
+            clipping_ancestor_tag=item.get("blockerTag"),
+        )
+        for item in occlusion_data
+    ]
+
+
 async def _detect_cutoff_on_page(
     page, visibility_threshold: float
 ) -> List[CutoffElement]:
-    """Run cutoff detection JS on an already-loaded Playwright page."""
+    """Run overflow-clipping and occlusion detection on an already-loaded Playwright page."""
     cutoff_data = await page.evaluate(_CUTOFF_JS, visibility_threshold)
-    return _parse_cutoff_data(cutoff_data)
+    occlusion_data = await page.evaluate(_OCCLUSION_JS)
+    return _parse_cutoff_data(cutoff_data) + _parse_occlusion_data(occlusion_data)
 
 
 async def detect_cutoff_text(
@@ -248,9 +368,12 @@ def has_significant_cutoff(
     """
     Determine if the detected cutoff elements represent significant content loss.
 
-    Only horizontal clipping (left/right) by overflow:hidden containers is
-    considered significant. Vertical clipping is ignored because PDF scaling
-    handles vertical overflow.
+    Flags two types of issues:
+    1. Horizontal overflow clipping — text width cut by overflow:hidden containers.
+    2. Occlusion — text covered by opaque non-ancestor elements.
+
+    Vertical-only clipping is ignored (PDF scaling handles it).
+    Watermarks / transparent overlays are ignored by the detection JS.
 
     Args:
         cutoff_elements: List of CutoffElement from detect_cutoff_text.
@@ -260,14 +383,17 @@ def has_significant_cutoff(
             element's width is hidden).
 
     Returns:
-        True if there is significant horizontal text cutoff that warrants
+        True if there is significant text cutoff or occlusion that warrants
         skipping or re-rendering.
     """
     for el in cutoff_elements:
-        if (
-            len(el.text.strip()) >= min_text_length
-            and el.horizontal_visible_ratio <= max_visible_ratio
-        ):
+        if len(el.text.strip()) < min_text_length:
+            continue
+        # Horizontal overflow clipping
+        if el.horizontal_visible_ratio <= max_visible_ratio:
+            return True
+        # Occlusion by opaque element
+        if el.is_occluded:
             return True
     return False
 
@@ -359,8 +485,17 @@ async def classify_html_files(
                 status = "CUTOFF" if is_cutoff else "ok"
                 detail = ""
                 if is_cutoff:
-                    worst = min(elements, key=lambda e: e.horizontal_visible_ratio)
-                    detail = f"  worst: {worst.tag} hvis={worst.horizontal_visible_ratio:.2f} \"{worst.text[:60]}\""
+                    # Show the worst occluded element if any, otherwise worst clipped
+                    occluded = [e for e in elements if e.is_occluded and len(e.text.strip()) >= min_text_length]
+                    clipped = [e for e in elements if not e.is_occluded and e.horizontal_visible_ratio <= max_visible_ratio and len(e.text.strip()) >= min_text_length]
+                    if occluded:
+                        worst = occluded[0]
+                        detail = f"  occluded: {worst.tag} by={worst.clipping_ancestor_tag} \"{worst.text[:60]}\""
+                    elif clipped:
+                        worst = min(clipped, key=lambda e: e.horizontal_visible_ratio)
+                        detail = f"  clipped: {worst.tag} hvis={worst.horizontal_visible_ratio:.2f} \"{worst.text[:60]}\""
+                    else:
+                        detail = ""
                 print(f"[{status:6s}] {filename}{detail}")
 
             except Exception as e:
