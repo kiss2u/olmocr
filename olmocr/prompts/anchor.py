@@ -13,8 +13,6 @@ import pypdfium2 as pdfium
 from pypdf import PdfReader
 from pypdf.generic import RectangleObject
 
-from olmocr.filter.coherency import get_document_coherency
-
 
 def get_anchor_text(
     local_pdf_path: str | PathLike, page: int, pdf_engine: Literal["pdftotext", "pdfium", "pypdf", "topcoherency", "pdfreport"], target_length: int = 4000
@@ -28,6 +26,9 @@ def get_anchor_text(
     elif pdf_engine == "pypdf":
         return _get_pypdf_raw(local_pdf_path, page)
     elif pdf_engine == "topcoherency":
+        # Lazy import to avoid requiring torch/transformers for basic usage
+        from olmocr.filter.coherency import get_document_coherency
+
         options = {
             "pdftotext": _get_pdftotext(local_pdf_path, page),
             "pdfium": _get_pdfium(local_pdf_path, page),

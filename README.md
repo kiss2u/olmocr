@@ -185,64 +185,113 @@ We also ship a comprehensive benchmark suite covering over 7,000 test cases acro
 
 ### Installation
 
-Requirements:
- - Recent NVIDIA GPU (tested on RTX 4090, L40S, A100, H100) with at least 12 GB of GPU RAM
- - 30GB of free disk space
+#### System Dependencies
 
 You will need to install poppler-utils and additional fonts for rendering PDF images.
 
-Install dependencies (Ubuntu/Debian)
+Install dependencies (Ubuntu/Debian):
 ```bash
 sudo apt-get update
 sudo apt-get install poppler-utils ttf-mscorefonts-installer msttcorefonts fonts-crosextra-caladea fonts-crosextra-carlito gsfonts lcdf-typetools
 ```
 
+#### Python Installation
+
 Set up a conda environment and install olmocr. The requirements for running olmOCR
 are difficult to install in an existing python environment, so please do make a clean python environment to install into.
+
 ```bash
 conda create -n olmocr python=3.11
 conda activate olmocr
+```
 
-# For CPU-only operations, ex running the benchmark
-pip install olmocr[bench]
+Choose the installation option that matches your use case:
 
-# For actually converting the files with your own GPU
-pip install olmocr[gpu]  --extra-index-url https://download.pytorch.org/whl/cu128
+**Option 1: Remote Inference (Lightweight)**
+
+If you plan to use a remote vLLM server with the `--server` flag, install the base package:
+```bash
+pip install olmocr
+```
+This avoids installing heavy GPU dependencies like PyTorch (~2GB+).
+
+**Option 2: Local GPU Inference**
+
+Requirements:
+ - Recent NVIDIA GPU (tested on RTX 4090, L40S, A100, H100) with at least 12 GB of GPU RAM
+ - 30GB of free disk space
+
+For running inference with your own GPU:
+```bash
+pip install olmocr[gpu] --extra-index-url https://download.pytorch.org/whl/cu128
 
 # Recommended: Install flash infer for faster inference on GPU
 pip install https://download.pytorch.org/whl/cu128/flashinfer/flashinfer_python-0.2.5%2Bcu128torch2.7-cp38-abi3-linux_x86_64.whl
 ```
 
-Also, if you run into errors about `too many open files`, please update your ulimit accordingly:
+**Option 3: Beaker Cluster Execution**
 
+For submitting jobs to Beaker clusters with the `--beaker` flag:
+```bash
+pip install olmocr[beaker]
+```
+
+**Option 4: Benchmark Suite**
+
+For running the olmOCR benchmark suite:
+```bash
+pip install olmocr[bench]
+```
+
+**Combined Installation**
+
+You can combine multiple options:
+```bash
+# GPU + Beaker support
+pip install olmocr[gpu,beaker] --extra-index-url https://download.pytorch.org/whl/cu128
+
+# GPU + Benchmark support
+pip install olmocr[gpu,bench] --extra-index-url https://download.pytorch.org/whl/cu128
+```
+
+**Troubleshooting**
+
+If you run into errors about `too many open files`, update your ulimit:
 ```bash
 ulimit -n 65536
 ```
 
-### Local Usage Example
+### Usage Examples
 
-For quick testing, try the [web demo](https://olmocr.allen.ai/). To run locally, a GPU is required, as inference is powered by [sglang](https://github.com/sgl-project/sglang) under the hood.
+For quick testing, try the [web demo](https://olmocr.allen.ai/).
 
-Convert a Single PDF:
+**Convert a Single PDF (Local GPU):**
 ```bash
 # Download a sample PDF
 curl -o olmocr-sample.pdf https://olmocr.allenai.org/papers/olmocr_3pg_sample.pdf
 
 # Convert it to markdown
-python -m olmocr.pipeline ./localworkspace --markdown --pdfs olmocr-sample.pdf
+olmocr ./localworkspace --markdown --pdfs olmocr-sample.pdf
 ```
 
-Convert an Image file:
+**Convert an Image file:**
 ```bash
-python -m olmocr.pipeline ./localworkspace --markdown --pdfs random_page.png
+olmocr ./localworkspace --markdown --pdfs random_page.png
 ```
 
-Convert Multiple PDFs:
+**Convert Multiple PDFs:**
 ```bash
-python -m olmocr.pipeline ./localworkspace --markdown --pdfs tests/gnarly_pdfs/*.pdf
+olmocr ./localworkspace --markdown --pdfs tests/gnarly_pdfs/*.pdf
 ```
 
-With the addition of the `--markdown` flag, results will be stored as markdown files inside of `./localworkspace/markdown/`. 
+**Use Remote Inference Server:**
+```bash
+olmocr ./localworkspace --server http://remote-server:8000/v1 --model allenai/olmOCR-2-7B-1025-FP8 --markdown --pdfs *.pdf
+```
+
+With the `--markdown` flag, results will be stored as markdown files inside of `./localworkspace/markdown/`.
+
+> **Note:** You can also use `python -m olmocr.pipeline` instead of `olmocr` if you prefer. 
 
 #### Viewing Results
 
@@ -260,15 +309,23 @@ olmOCR: Unlocking Trillions of Tokens in PDFs with Vision Language Models
 
 ### Using an Inference Provider or External Server
 
-If you have a vLLM server already running elsewhere (or any inference platform implementing the OpenAI API), you can point olmOCR to use it instead of spawning a local instance:
+If you have a vLLM server already running elsewhere (or any inference platform implementing the OpenAI API), you can point olmOCR to use it instead of spawning a local instance.
 
+**Installation for Remote Inference:**
+```bash
+# Lightweight installation - no GPU dependencies needed
+pip install olmocr
+```
+
+**Using an External Server:**
 ```bash
 # Use external vLLM server instead of local one
-python -m olmocr.pipeline ./localworkspace --server http://remote-server:8000/v1 --model allenai/olmOCR-2-7B-1025-FP8 --markdown --pdfs tests/gnarly_pdfs/*.pdf
+olmocr ./localworkspace --server http://remote-server:8000/v1 --model allenai/olmOCR-2-7B-1025-FP8 --markdown --pdfs tests/gnarly_pdfs/*.pdf
 ```
-The served model name in VLLM needs to match the value provided in `--model`.
 
-An example vLLM launch command would be:
+The served model name in vLLM needs to match the value provided in `--model`.
+
+**Example vLLM Server Launch:**
 ```bash
 vllm serve allenai/olmOCR-2-7B-1025-FP8 --max-model-len 16384
 ```
@@ -279,9 +336,9 @@ We have tested `olmOCR-2-7B-1025-FP8` on these external model providers and conf
 
 |                                                                             | $/1M Input tokens | $/1M Output tokens | Example Command                                                                                                                                                                |
 |-----------------------------------------------------------------------------|-------------------|--------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| [Cirrascale](https://ai2endpoints.cirrascale.ai/models/overview)            | $0.07             | $0.15              | `python -m olmocr.pipeline ./localworkspace1 --server https://ai2endpoints.cirrascale.ai/api --api_key sk-XXXXXXX --workers 1 --max_concurrent_requests 20 --model olmOCR-2-7B-1025 --pdfs tests/gnarly_pdfs/*.pdf`     |
-| [DeepInfra](https://deepinfra.com/)                                         | $0.09             | $0.19              | `python -m olmocr.pipeline ./localworkspace1 --server https://api.deepinfra.com/v1/openai --api_key DfXXXXXXX --workers 1 --max_concurrent_requests 20 --model allenai/olmOCR-2-7B-1025 --pdfs tests/gnarly_pdfs/*.pdf` |
-| [Parasail](https://www.saas.parasail.io/serverless?name=olmocr-7b-1025-fp8) | $0.10             | $0.20              | `python -m olmocr.pipeline ./localworkspace1 --server https://api.parasail.io/v1 --api_key psk-XXXXX --workers 1 --max_concurrent_requests 20 --model allenai/olmOCR-2-7B-1025 --pdfs tests/gnarly_pdfs/*.pdf`          |
+| [Cirrascale](https://ai2endpoints.cirrascale.ai/models/overview)            | $0.07             | $0.15              | `olmocr ./workspace --server https://ai2endpoints.cirrascale.ai/api --api_key sk-XXXXXXX --workers 1 --max_concurrent_requests 20 --model olmOCR-2-7B-1025 --pdfs tests/gnarly_pdfs/*.pdf`     |
+| [DeepInfra](https://deepinfra.com/)                                         | $0.09             | $0.19              | `olmocr ./workspace --server https://api.deepinfra.com/v1/openai --api_key DfXXXXXXX --workers 1 --max_concurrent_requests 20 --model allenai/olmOCR-2-7B-1025 --pdfs tests/gnarly_pdfs/*.pdf` |
+| [Parasail](https://www.saas.parasail.io/serverless?name=olmocr-7b-1025-fp8) | $0.10             | $0.20              | `olmocr ./workspace --server https://api.parasail.io/v1 --api_key psk-XXXXX --workers 1 --max_concurrent_requests 20 --model allenai/olmOCR-2-7B-1025 --pdfs tests/gnarly_pdfs/*.pdf`          |
 
 
 Notes on arguments
@@ -296,28 +353,35 @@ Notes on arguments
 
 ### Multi-node / Cluster Usage
 
-If you want to convert millions of PDFs, using multiple nodes running in parallel, then olmOCR supports
-reading your PDFs from AWS S3, and coordinating work using an AWS S3 output bucket.
+If you want to convert millions of PDFs using multiple nodes running in parallel, olmOCR supports
+reading PDFs from AWS S3 and coordinating work using an AWS S3 output bucket.
 
-For example, you can start this command on your first worker node, and it will set up
-a simple work queue in your AWS bucket and start converting PDFs.
-
+**Start the first worker node:**
 ```bash
-python -m olmocr.pipeline s3://my_s3_bucket/pdfworkspaces/exampleworkspace --pdfs s3://my_s3_bucket/jakep/gnarly_pdfs/*.pdf
+olmocr s3://my_s3_bucket/pdfworkspaces/exampleworkspace --pdfs s3://my_s3_bucket/jakep/gnarly_pdfs/*.pdf
 ```
 
-Now on any subsequent nodes, just run this and they will start grabbing items from the same workspace queue.
+This sets up a simple work queue in your AWS bucket and starts converting PDFs.
+
+**On subsequent worker nodes:**
 ```bash
-python -m olmocr.pipeline s3://my_s3_bucket/pdfworkspaces/exampleworkspace
+olmocr s3://my_s3_bucket/pdfworkspaces/exampleworkspace
 ```
 
-If you are at Ai2 and want to linearize millions of PDFs efficiently using [beaker](https://www.beaker.org), just add the `--beaker`
-flag. This will prepare the workspace on your local machine, and then launch N GPU workers in the cluster to start
-converting PDFs.
+They will automatically start grabbing items from the same workspace queue.
 
-For example:
+#### Using Beaker for Cluster Execution
+
+If you are at Ai2 and want to linearize millions of PDFs efficiently using [beaker](https://www.beaker.org), install with Beaker support:
+
 ```bash
-python -m olmocr.pipeline s3://my_s3_bucket/pdfworkspaces/exampleworkspace --pdfs s3://my_s3_bucket/jakep/gnarly_pdfs/*.pdf --beaker --beaker_gpus 4
+pip install olmocr[gpu,beaker] --extra-index-url https://download.pytorch.org/whl/cu128
+```
+
+Then use the `--beaker` flag to prepare the workspace locally and launch N GPU workers in the cluster:
+
+```bash
+olmocr s3://my_s3_bucket/pdfworkspaces/exampleworkspace --pdfs s3://my_s3_bucket/jakep/gnarly_pdfs/*.pdf --beaker --beaker_gpus 4
 ```
 
 
@@ -340,7 +404,7 @@ Process a single PDF in your current directory:
 docker run --gpus all \
   -v $(pwd):/workspace \
   alleninstituteforai/olmocr:latest-with-model \
-  -c "python -m olmocr.pipeline /workspace/output --markdown --pdfs /workspace/sample.pdf"
+  -c "olmocr /workspace/output --markdown --pdfs /workspace/sample.pdf"
 ```
 
 Process multiple PDFs:
@@ -349,7 +413,7 @@ docker run --gpus all \
   -v /path/to/pdfs:/input \
   -v /path/to/output:/output \
   alleninstituteforai/olmocr:latest-with-model \
-  -c "python -m olmocr.pipeline /output --markdown --pdfs /input/*.pdf"
+  -c "olmocr /output --markdown --pdfs /input/*.pdf"
 ```
 
 #### Interactive Mode
@@ -361,10 +425,11 @@ docker run -it --gpus all alleninstituteforai/olmocr:latest-with-model
 
 > Visit our Docker repository on [Docker Hub](https://hub.docker.com/r/alleninstituteforai/olmocr) for more information.
 
-### Full documentation for the pipeline
+### Full Documentation
 
+To see all available options:
 ```bash
-python -m olmocr.pipeline --help
+olmocr --help
 usage: pipeline.py [-h] [--pdfs [PDFS ...]] [--model MODEL] [--workspace_profile WORKSPACE_PROFILE] [--pdf_profile PDF_PROFILE] [--pages_per_group PAGES_PER_GROUP] [--max_page_retries MAX_PAGE_RETRIES] [--max_page_error_rate MAX_PAGE_ERROR_RATE] [--workers WORKERS]
                    [--apply_filter] [--stats] [--markdown] [--target_longest_image_dim TARGET_LONGEST_IMAGE_DIM] [--target_anchor_text_len TARGET_ANCHOR_TEXT_LEN] [--guided_decoding] [--gpu-memory-utilization GPU_MEMORY_UTILIZATION] [--max_model_len MAX_MODEL_LEN]
                    [--tensor-parallel-size TENSOR_PARALLEL_SIZE] [--data-parallel-size DATA_PARALLEL_SIZE] [--port PORT] [--server SERVER] [--beaker] [--beaker_workspace BEAKER_WORKSPACE] [--beaker_cluster BEAKER_CLUSTER] [--beaker_gpus BEAKER_GPUS] [--beaker_priority BEAKER_PRIORITY]
