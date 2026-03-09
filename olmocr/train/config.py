@@ -393,6 +393,7 @@ class Config:
             StaticLengthDocumentAnchoring,
             Tokenizer,
         )
+        from olmocr.train.front_matter import FrontMatterParser
 
         steps = []
         for step_config in pipeline_config:
