@@ -18,7 +18,7 @@ from olmocr.prompts.prompts import (
     build_no_anchoring_yaml_prompt,
     build_openai_silver_data_prompt,
 )
-from olmocr.train.dataloader import FrontMatterParser
+from olmocr.train.front_matter import FrontMatterParser
 
 _cached_model = None
 _cached_processor = None
