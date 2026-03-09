@@ -149,7 +149,7 @@ echo "Beaker user: $BEAKER_USER"
 # Create Python script to run beaker experiment
 cat << 'EOF' > /tmp/run_benchmark_experiment.py
 import sys
-from beaker import Beaker, ExperimentSpec, TaskSpec, TaskContext, ResultSpec, TaskResources, ImageSource, Priority, Constraints, EnvVar
+from beaker import Beaker, BeakerExperimentSpec, BeakerTaskSpec, BeakerTaskContext, BeakerResultSpec, BeakerTaskResources, BeakerImageSource, BeakerJobPriority, BeakerConstraints, BeakerEnvVar
 
 # Get image tag, beaker user, git branch, git hash, optional model, cluster, bench branch, bench repo, and repeats from command line
 image_tag = sys.argv[1]
@@ -283,40 +283,40 @@ else:
 
 task_spec_args = {
     "name": "olmocr-benchmark",
-    "image": ImageSource(beaker=image_ref),
+    "image": BeakerImageSource(beaker=image_ref),
     "command": [
         "bash", "-c",
         " && ".join(commands)
     ],
-    "context": TaskContext(
-        priority=Priority.normal,
+    "context": BeakerTaskContext(
+        priority=BeakerJobPriority["normal"],
         preemptible=True,
     ),
-    "resources": TaskResources(gpu_count=1),
-    "constraints": Constraints(cluster=[cluster] if cluster else ["ai2/ceres-cirrascale", "ai2/jupiter-cirrascale-2"]),
-    "result": ResultSpec(path="/noop-results"),
+    "resources": BeakerTaskResources(gpu_count=1),
+    "constraints": BeakerConstraints(cluster=[cluster] if cluster else ["ai2/ceres-cirrascale", "ai2/jupiter-cirrascale-2"]),
+    "result": BeakerResultSpec(path="/noop-results"),
 }
 
 # Add env vars if AWS credentials or HF token exist
 env_vars = []
 if has_aws_creds:
-    env_vars.append(EnvVar(name="AWS_CREDENTIALS_FILE", secret=aws_creds_secret))
+    env_vars.append(BeakerEnvVar(name="AWS_CREDENTIALS_FILE", secret=aws_creds_secret))
 if has_hf_token:
-    env_vars.append(EnvVar(name="HF_TOKEN", secret=hf_token_secret))
+    env_vars.append(BeakerEnvVar(name="HF_TOKEN", secret=hf_token_secret))
 if env_vars:
     task_spec_args["env_vars"] = env_vars
 
 # Create first experiment spec
-experiment_spec = ExperimentSpec(
+experiment_spec = BeakerExperimentSpec(
     description=f"OlmOCR Benchmark Run - Branch: {git_branch}, Commit: {git_hash}",
     budget="ai2/oe-base",
-    tasks=[TaskSpec(**task_spec_args)],
+    tasks=[BeakerTaskSpec(**task_spec_args)],
 )
 
 # Create the first experiment
-experiment = b.experiment.create(spec=experiment_spec, workspace="ai2/olmocr")
-print(f"Created benchmark experiment: {experiment.id}")
-print(f"View at: https://beaker.org/ex/{experiment.id}")
+workload = b.experiment.create(spec=experiment_spec, workspace="ai2/olmocr")
+print(f"Created benchmark experiment: {workload.experiment.id}")
+print(f"View at: https://beaker.org/ex/{workload.experiment.id}")
 print("-------")
 print("")
 
@@ -341,41 +341,41 @@ if not noperf:
     # Build performance task spec
     perf_task_spec_args = {
         "name": "olmocr-performance",
-        "image": ImageSource(beaker=image_ref),
+        "image": BeakerImageSource(beaker=image_ref),
         "command": [
             "bash", "-c",
             " && ".join(perf_commands)
         ],
-        "context": TaskContext(
-            priority=Priority.normal,
+        "context": BeakerTaskContext(
+            priority=BeakerJobPriority["normal"],
             preemptible=True,
         ),
         # Need to reserve all 8 gpus for performance spec or else benchmark results can be off (1 for titan-cirrascale)
-        "resources": TaskResources(gpu_count=1 if cluster == "ai2/titan-cirrascale" else 8),
-        "constraints": Constraints(cluster=[cluster] if cluster else ["ai2/ceres-cirrascale", "ai2/jupiter-cirrascale-2"]),
-        "result": ResultSpec(path="/noop-results"),
+        "resources": BeakerTaskResources(gpu_count=1 if cluster == "ai2/titan-cirrascale" else 8),
+        "constraints": BeakerConstraints(cluster=[cluster] if cluster else ["ai2/ceres-cirrascale", "ai2/jupiter-cirrascale-2"]),
+        "result": BeakerResultSpec(path="/noop-results"),
     }
 
     # Add env vars if AWS credentials or HF token exist
     env_vars = []
     if has_aws_creds:
-        env_vars.append(EnvVar(name="AWS_CREDENTIALS_FILE", secret=aws_creds_secret))
+        env_vars.append(BeakerEnvVar(name="AWS_CREDENTIALS_FILE", secret=aws_creds_secret))
     if has_hf_token:
-        env_vars.append(EnvVar(name="HF_TOKEN", secret=hf_token_secret))
+        env_vars.append(BeakerEnvVar(name="HF_TOKEN", secret=hf_token_secret))
     if env_vars:
         perf_task_spec_args["env_vars"] = env_vars
 
     # Create performance experiment spec
-    perf_experiment_spec = ExperimentSpec(
+    perf_experiment_spec = BeakerExperimentSpec(
         description=f"OlmOCR Performance Test - Branch: {git_branch}, Commit: {git_hash}",
         budget="ai2/oe-base",
-        tasks=[TaskSpec(**perf_task_spec_args)],
+        tasks=[BeakerTaskSpec(**perf_task_spec_args)],
     )
 
     # Create the performance experiment
-    perf_experiment = b.experiment.create(spec=perf_experiment_spec, workspace="ai2/olmocr")
-    print(f"Created performance experiment: {perf_experiment.id}")
-    print(f"View at: https://beaker.org/ex/{perf_experiment.id}")
+    perf_workload = b.experiment.create(spec=perf_experiment_spec, workspace="ai2/olmocr")
+    print(f"Created performance experiment: {perf_workload.experiment.id}")
+    print(f"View at: https://beaker.org/ex/{perf_workload.experiment.id}")
 else:
     print("Skipping performance test (--noperf flag specified)")
 EOF
