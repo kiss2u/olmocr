@@ -22,7 +22,7 @@ import pandas as pd
 from tqdm import tqdm
 
 from olmocr.prompts import PageResponse
-from olmocr.train.dataloader import FrontMatterParser
+from olmocr.train.front_matter import FrontMatterParser
 
 DEFAULT_MAX_TAR_BYTES = 1_073_741_824  # 1 GiB
 

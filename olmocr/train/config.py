@@ -374,13 +374,13 @@ class Config:
             List of initialized pipeline step instances
         """
         from olmocr.prompts.prompts import PageResponse
+        from olmocr.train.front_matter import FrontMatterParser
         from olmocr.train.dataloader import (
             AugraphyBasicAugmentations,
             DatasetTextRuleFilter,
             FilterOutRotatedDocuments,
             FinetuningPrompt,
             FrontMatterOutputFormat,
-            FrontMatterParser,
             InstructUserMessages,
             JSONOutputFormat,
             LatexBracketNormalizer,
@@ -393,6 +393,7 @@ class Config:
             StaticLengthDocumentAnchoring,
             Tokenizer,
         )
+        from olmocr.train.front_matter import FrontMatterParser
 
         steps = []
         for step_config in pipeline_config:

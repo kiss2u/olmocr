@@ -30,7 +30,7 @@ from trl import GRPOConfig, GRPOTrainer
 from olmocr.bench.tests import load_single_test
 from olmocr.data.renderpdf import render_pdf_to_base64png
 from olmocr.prompts import PageResponse, build_no_anchoring_v4_yaml_prompt
-from olmocr.train.dataloader import FrontMatterParser
+from olmocr.train.front_matter import FrontMatterParser
 
 # Configure logging
 logging.basicConfig(

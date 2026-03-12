@@ -47,7 +47,7 @@ from olmocr.s3_utils import (
     get_s3_bytes_with_backoff,
     parse_s3_path,
 )
-from olmocr.train.dataloader import FrontMatterParser
+from olmocr.train.front_matter import FrontMatterParser
 from olmocr.version import VERSION
 from olmocr.work_queue import LocalBackend, S3Backend, WorkQueue
 
@@ -206,6 +206,7 @@ async def try_single_page(
             is_valid = False
 
         model_response_markdown = base_response_data["choices"][0]["message"]["content"]
+
         parser = FrontMatterParser(front_matter_class=PageResponse)
         front_matter, text = parser._extract_front_matter_and_text(model_response_markdown)
         page_response = parser._parse_front_matter(front_matter, text)
@@ -1522,5 +1523,10 @@ async def main():
     logger.info("Work done")
 
 
+def cli_main():
+    """Synchronous entry point for the CLI."""
+    return asyncio.run(main())
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    cli_main()

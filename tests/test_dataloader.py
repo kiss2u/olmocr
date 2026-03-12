@@ -9,10 +9,10 @@ from olmocr.prompts.prompts import PageResponse
 from olmocr.train.dataloader import (
     DatasetTextRuleFilter,
     FilterOutRotatedDocuments,
-    FrontMatterParser,
     LatexBracketNormalizer,
     ReformatLatexBoldItalic,
 )
+from olmocr.train.front_matter import FrontMatterParser
 
 
 class TestDatasetTextRuleFilter(unittest.TestCase):
