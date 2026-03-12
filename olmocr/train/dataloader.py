@@ -179,7 +179,6 @@ class BaseMarkdownPDFDataset(Dataset):
         return sample
 
 
-
 # FrontMatterParser is imported from olmocr.train.front_matter
 
 
