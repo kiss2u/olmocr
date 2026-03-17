@@ -1,6 +1,6 @@
 import glob
 import os
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from tqdm import tqdm
 
@@ -9,8 +9,42 @@ from olmocr.data.renderpdf import render_pdf_to_base64webp
 from .tests import BasePDFTest
 
 
+def _filter_by_max_reports(
+    test_results_by_candidate: Dict[str, Dict[str, Dict[int, List[Tuple[BasePDFTest, bool, str]]]]],
+    test_to_jsonl: Dict[str, str],
+    max_reports: int,
+) -> Dict[str, Dict[str, Dict[int, List[Tuple[BasePDFTest, bool, str]]]]]:
+    """Filter test results to include at most max_reports unique PDFs per .jsonl file."""
+    filtered = {}
+    for candidate, pdf_results in test_results_by_candidate.items():
+        # Track which unique PDFs we've included per jsonl file
+        jsonl_pdfs: Dict[str, set] = {}
+        filtered_pdfs: Dict[str, Dict[int, List[Tuple[BasePDFTest, bool, str]]]] = {}
+
+        for pdf_name in sorted(pdf_results.keys()):
+            pages = pdf_results[pdf_name]
+            for page in sorted(pages.keys()):
+                for test_tuple in pages[page]:
+                    test, passed, explanation = test_tuple
+                    jsonl_file = test_to_jsonl.get(test.id, "unknown")
+                    jsonl_pdfs.setdefault(jsonl_file, set())
+                    # If this PDF is new for this jsonl file, check the limit
+                    if pdf_name not in jsonl_pdfs[jsonl_file]:
+                        if len(jsonl_pdfs[jsonl_file]) >= max_reports:
+                            continue
+                        jsonl_pdfs[jsonl_file].add(pdf_name)
+                    filtered_pdfs.setdefault(pdf_name, {}).setdefault(page, []).append(test_tuple)
+
+        filtered[candidate] = filtered_pdfs
+    return filtered
+
+
 def generate_html_report(
-    test_results_by_candidate: Dict[str, Dict[str, Dict[int, List[Tuple[BasePDFTest, bool, str]]]]], pdf_folder: str, output_file: str
+    test_results_by_candidate: Dict[str, Dict[str, Dict[int, List[Tuple[BasePDFTest, bool, str]]]]],
+    pdf_folder: str,
+    output_file: str,
+    max_reports: Optional[int] = None,
+    test_to_jsonl: Optional[Dict[str, str]] = None,
 ) -> None:
     """
     Generate a simple static HTML report of test results.
@@ -20,7 +54,12 @@ def generate_html_report(
                                   mapping page number to list of (test, passed, explanation) tuples.
         pdf_folder: Path to the folder containing PDF files.
         output_file: Path to the output HTML file.
+        max_reports: If set, limit to at most N tests per .jsonl file in the report.
+        test_to_jsonl: Dictionary mapping test IDs to their source jsonl filenames.
     """
+    # If max_reports is set, filter test_results_by_candidate to limit per jsonl file
+    if max_reports is not None and test_to_jsonl is not None:
+        test_results_by_candidate = _filter_by_max_reports(test_results_by_candidate, test_to_jsonl, max_reports)
     candidates = list(test_results_by_candidate.keys())
 
     # Create HTML report
@@ -74,6 +113,21 @@ def generate_html_report(
             white-space: pre-wrap;
             overflow-x: auto;
             margin: 10px 0;
+        }
+
+        .markdown-content table {
+            border-collapse: collapse;
+            margin: 10px 0;
+        }
+
+        .markdown-content th,
+        .markdown-content td {
+            border: 1px solid #999;
+            padding: 4px 8px;
+        }
+
+        .markdown-content th {
+            background-color: #e0e0e0;
         }
         
         .status {
@@ -176,6 +230,25 @@ def generate_html_report(
                     elif test_type == "math" and hasattr(test, "math"):
                         math = getattr(test, "math", "")
                         html += f"""            <p><strong>Math equation:</strong> {math}</p>\n"""
+                    elif test_type == "format" and hasattr(test, "text"):
+                        text = getattr(test, "text", "")
+                        fmt = getattr(test, "format", "")
+                        html += f"""            <p><strong>Text:</strong> "{text}" should be formatted as <strong>{fmt}</strong></p>\n"""
+                    elif test_type == "footnote" and hasattr(test, "marker"):
+                        marker = getattr(test, "marker", "")
+                        html += f"""            <p><strong>Footnote marker:</strong> {marker}</p>\n"""
+                        before = getattr(test, "appears_before_marker", None)
+                        after = getattr(test, "appears_after_marker", None)
+                        if before:
+                            html += f"""            <p><strong>Text before marker:</strong> "{before}"</p>\n"""
+                        if after:
+                            html += f"""            <p><strong>Text after marker:</strong> "{after}"</p>\n"""
+                    elif test_type == "baseline":
+                        max_length = getattr(test, "max_length", None)
+                        if max_length is not None:
+                            html += f"""            <p><strong>Baseline check:</strong> max length {max_length} (blank page check)</p>\n"""
+                        else:
+                            html += f"""            <p><strong>Baseline check:</strong> non-blank, no repeats, valid characters</p>\n"""
 
                     html += """        </div>\n"""
 
