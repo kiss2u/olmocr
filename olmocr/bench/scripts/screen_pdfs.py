@@ -124,10 +124,7 @@ async def main():
     semaphore = asyncio.Semaphore(args.max_concurrent)
 
     # Launch all tasks, bounded by semaphore
-    tasks = [
-        process_one(client, category, pdf_path, args.model, semaphore)
-        for category, pdf_path in pdf_files
-    ]
+    tasks = [process_one(client, category, pdf_path, args.model, semaphore) for category, pdf_path in pdf_files]
 
     all_results = []
     flagged = []
