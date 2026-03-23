@@ -8,6 +8,10 @@
 #   ./scripts/run_chandra_benchmark.sh --benchrepo allenai/olmOCR-bench-internal  # Use different benchmark repo
 #   ./scripts/run_chandra_benchmark.sh --benchbranch olmOCR-bench-1125      # Use specific branch/revision
 #   ./scripts/run_chandra_benchmark.sh --benchpath s3://ai2-oe-data/path/   # Use benchmark from S3 or local path
+#   ./scripts/run_chandra_benchmark.sh --cluster ai2/titan-cirrascale       # Specify a cluster
+#   ./scripts/run_chandra_benchmark.sh --beaker-image jakep/olmocr-benchmark-0.3.3-780bc7d934  # Skip Docker build
+#   ./scripts/run_chandra_benchmark.sh --noperf                             # Skip the performance test job
+#   ./scripts/run_chandra_benchmark.sh --model datalab-to/chandra-ocr-2     # Use a specific model
 
 set -e
 
@@ -16,6 +20,10 @@ CHANDRA_VERSION=""
 BENCH_BRANCH=""
 BENCH_REPO=""
 BENCH_PATH=""
+CLUSTER=""
+BEAKER_IMAGE=""
+NOPERF=""
+MODEL=""
 
 # Default to latest if no version specified
 while [[ $# -gt 0 ]]; do
@@ -36,13 +44,29 @@ while [[ $# -gt 0 ]]; do
             BENCH_PATH="$2"
             shift 2
             ;;
+        --cluster)
+            CLUSTER="$2"
+            shift 2
+            ;;
+        --beaker-image)
+            BEAKER_IMAGE="$2"
+            shift 2
+            ;;
+        --noperf)
+            NOPERF="1"
+            shift
+            ;;
+        --model)
+            MODEL="$2"
+            shift 2
+            ;;
         *)
             # If no flag, assume it's the version for backward compatibility
             if [ -z "$CHANDRA_VERSION" ]; then
                 CHANDRA_VERSION="$1"
             else
                 echo "Unknown option: $1"
-                echo "Usage: $0 [VERSION] [--version VERSION] [--benchbranch BRANCH] [--benchrepo REPO] [--benchpath PATH]"
+                echo "Usage: $0 [VERSION] [--version VERSION] [--benchbranch BRANCH] [--benchrepo REPO] [--benchpath PATH] [--cluster CLUSTER] [--beaker-image IMAGE] [--noperf] [--model MODEL]"
                 exit 1
             fi
             shift
@@ -71,13 +95,17 @@ if [ -n "$BENCH_PATH" ] && ([ -n "$BENCH_REPO" ] || [ -n "$BENCH_BRANCH" ]); the
 fi
 
 # Check for uncommitted changes
-if ! git diff-index --quiet HEAD --; then
-    echo "Error: There are uncommitted changes in the repository."
-    echo "Please commit or stash your changes before running the benchmark."
-    echo ""
-    echo "Uncommitted changes:"
-    git status --short
-    exit 1
+if [ -n "$BEAKER_IMAGE" ]; then
+ echo "Skipping docker build"
+else
+    if ! git diff-index --quiet HEAD --; then
+        echo "Error: There are uncommitted changes in the repository."
+        echo "Please commit or stash your changes before running the benchmark."
+        echo ""
+        echo "Uncommitted changes:"
+        git status --short
+        exit 1
+    fi
 fi
 
 # Use conda environment Python if available, otherwise use system Python
@@ -101,29 +129,35 @@ echo "Git hash: $GIT_HASH"
 GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
 echo "Git branch: $GIT_BRANCH"
 
-# Create full image tag
-IMAGE_TAG="olmocr-benchmark-${VERSION}-${GIT_HASH}"
-echo "Building Docker image with tag: $IMAGE_TAG"
+# Check if a Beaker image was provided
+if [ -n "$BEAKER_IMAGE" ]; then
+    echo "Using provided Beaker image: $BEAKER_IMAGE"
+    IMAGE_TAG="$BEAKER_IMAGE"
+else
+    # Create full image tag
+    IMAGE_TAG="olmocr-benchmark-${VERSION}-${GIT_HASH}"
+    echo "Building Docker image with tag: $IMAGE_TAG"
 
-# Build the Docker image
-echo "Building Docker image..."
-docker build --platform linux/amd64 -f ./Dockerfile -t $IMAGE_TAG .
+    # Build the Docker image
+    echo "Building Docker image..."
+    docker build --platform linux/amd64 -f ./Dockerfile -t $IMAGE_TAG .
+
+    # Push image to beaker
+    echo "Trying to push image to Beaker..."
+    if ! beaker image create --workspace ai2/oe-data-pdf --name $IMAGE_TAG $IMAGE_TAG 2>/dev/null; then
+        echo "Warning: Beaker image with tag $IMAGE_TAG already exists. Using existing image."
+    fi
+fi
 
 # Get Beaker username
 BEAKER_USER=$(beaker account whoami --format json | jq -r '.[0].name')
 echo "Beaker user: $BEAKER_USER"
 
-# Push image to beaker
-echo "Trying to push image to Beaker..."
-if ! beaker image create --workspace ai2/oe-data-pdf --name $IMAGE_TAG $IMAGE_TAG 2>/dev/null; then
-    echo "Warning: Beaker image with tag $IMAGE_TAG already exists. Using existing image."
-fi
-
 # Create Python script to run beaker experiment
 cat << 'EOF' > /tmp/run_benchmark_experiment.py
 import sys
 from textwrap import dedent
-from beaker import Beaker, ExperimentSpec, TaskSpec, TaskContext, ResultSpec, TaskResources, ImageSource, Priority, Constraints, EnvVar
+from beaker import Beaker, BeakerExperimentSpec, BeakerTaskSpec, BeakerTaskContext, BeakerResultSpec, BeakerTaskResources, BeakerImageSource, BeakerJobPriority, BeakerConstraints, BeakerEnvVar
 
 # Get image tag, beaker user, git branch, git hash, and chandra version from command line
 image_tag = sys.argv[1]
@@ -137,6 +171,9 @@ chandra_install_cmd = sys.argv[6]
 bench_branch = None
 bench_repo = "allenai/olmOCR-bench"  # Default repository
 bench_path = None
+cluster = None
+noperf = False
+model = None
 
 # Parse additional arguments
 arg_idx = 7
@@ -150,9 +187,21 @@ while arg_idx < len(sys.argv):
     elif sys.argv[arg_idx] == "--benchpath":
         bench_path = sys.argv[arg_idx + 1]
         arg_idx += 2
+    elif sys.argv[arg_idx] == "--cluster":
+        cluster = sys.argv[arg_idx + 1]
+        arg_idx += 2
+    elif sys.argv[arg_idx] == "--noperf":
+        noperf = True
+        arg_idx += 1
+    elif sys.argv[arg_idx] == "--model":
+        model = sys.argv[arg_idx + 1]
+        arg_idx += 2
     else:
         print(f"Unknown argument: {sys.argv[arg_idx]}")
         arg_idx += 1
+
+# Default model for chandra
+chandra_model = model if model else "datalab-to/chandra-ocr-2"
 
 # Initialize Beaker client
 b = Beaker.from_env(default_workspace="ai2/olmocr")
@@ -178,7 +227,7 @@ mkdir -p "$TARGET_ROOT"
 
 # Start vllm server in background
 echo "Starting vllm server for Chandra..."
-vllm serve datalab-to/chandra --served-model-name chandra > /tmp/vllm_server.log 2>&1 &
+vllm serve __CHANDRA_MODEL__ --served-model-name chandra > /tmp/vllm_server.log 2>&1 &
 VLLM_PID=$!
 
 # Wait for vllm server to be ready
@@ -252,7 +301,7 @@ done
 echo "Stopping vllm server..."
 kill $VLLM_PID || true
 wait $VLLM_PID 2>/dev/null || true
-'""")
+'""").replace("__CHANDRA_MODEL__", chandra_model)
 
 # Check if HF_TOKEN secret exists
 hf_token_secret = f"{beaker_user}-HF_TOKEN"
@@ -304,64 +353,71 @@ commands.extend([
 ])
 
 # Build task spec with optional env vars
+# If image_tag contains '/', it's already a full beaker image reference
+if '/' in image_tag:
+    image_ref = image_tag
+else:
+    image_ref = f"{beaker_user}/{image_tag}"
+
 task_spec_args = {
     "name": "chandra-benchmark",
-    "image": ImageSource(beaker=f"{beaker_user}/{image_tag}"),
+    "image": BeakerImageSource(beaker=image_ref),
     "command": [
         "bash", "-c",
         " && ".join(commands)
     ],
-    "context": TaskContext(
-        priority=Priority.normal,
+    "context": BeakerTaskContext(
+        priority=BeakerJobPriority["normal"],
         preemptible=True,
     ),
-    "resources": TaskResources(gpu_count=1),
-    "constraints": Constraints(cluster=["ai2/ceres-cirrascale", "ai2/jupiter-cirrascale-2"]),
-    "result": ResultSpec(path="/noop-results"),
+    "resources": BeakerTaskResources(gpu_count=1),
+    "constraints": BeakerConstraints(cluster=[cluster] if cluster else ["ai2/ceres-cirrascale", "ai2/jupiter-cirrascale-2"]),
+    "result": BeakerResultSpec(path="/noop-results"),
 }
 
 # Add env vars if AWS credentials or HF token exist
 env_vars = []
 if has_aws_creds:
-    env_vars.append(EnvVar(name="AWS_CREDENTIALS_FILE", secret=aws_creds_secret))
+    env_vars.append(BeakerEnvVar(name="AWS_CREDENTIALS_FILE", secret=aws_creds_secret))
 if has_hf_token:
-    env_vars.append(EnvVar(name="HF_TOKEN", secret=hf_token_secret))
+    env_vars.append(BeakerEnvVar(name="HF_TOKEN", secret=hf_token_secret))
 if env_vars:
     task_spec_args["env_vars"] = env_vars
 
 # Create first experiment spec
 chandra_version_label = "latest" if chandra_version == "latest" else chandra_version
-experiment_spec = ExperimentSpec(
+experiment_spec = BeakerExperimentSpec(
     description=f"Chandra {chandra_version_label} Benchmark Run - Branch: {git_branch}, Commit: {git_hash}",
     budget="ai2/oe-base",
-    tasks=[TaskSpec(**task_spec_args)],
+    tasks=[BeakerTaskSpec(**task_spec_args)],
 )
 
 # Create the first experiment
-experiment = b.experiment.create(spec=experiment_spec, workspace="ai2/olmocr")
-print(f"Created benchmark experiment: {experiment.id}")
-print(f"View at: https://beaker.org/ex/{experiment.id}")
+workload = b.experiment.create(spec=experiment_spec, workspace="ai2/olmocr")
+print(f"Created benchmark experiment: {workload.experiment.id}")
+print(f"View at: https://beaker.org/ex/{workload.experiment.id}")
 print("-------")
 print("")
 
-# Second experiment: Performance test
-perf_commands = []
-if has_aws_creds:
-    perf_commands.extend([
-        "mkdir -p ~/.aws",
-        'echo "$AWS_CREDENTIALS_FILE" > ~/.aws/credentials'
-    ])
+# Second experiment: Performance test job (only if --noperf not specified)
+if not noperf:
+    perf_commands = []
+    if has_aws_creds:
+        perf_commands.extend([
+            "mkdir -p ~/.aws",
+            'echo "$AWS_CREDENTIALS_FILE" > ~/.aws/credentials'
+        ])
 
-if has_hf_token:
-    perf_commands.append('export HF_TOKEN="$HF_TOKEN"')
+    if has_hf_token:
+        perf_commands.append('export HF_TOKEN="$HF_TOKEN"')
 
-# Shell script for performance test
-perf_shell = dedent("""\
+    # Shell script for performance test
+    perf_shell = dedent("""\
 set -euo pipefail
 
 # Start vllm server in background
 echo "Starting vllm server for Chandra..."
-vllm serve datalab-to/chandra --served-model-name chandra > /tmp/vllm_server.log 2>&1 &
+vllm serve __CHANDRA_MODEL__ --served-model-name chandra > /tmp/vllm_server.log 2>&1 &
 VLLM_PID=$!
 
 # Wait for vllm server to be ready
@@ -386,53 +442,56 @@ time chandra /root/olmOCR-mix-0225_benchmark_set/ /root/olmOCR-mix-0225_benchmar
 echo "Stopping vllm server..."
 kill $VLLM_PID || true
 wait $VLLM_PID 2>/dev/null || true
-""")
+""").replace("__CHANDRA_MODEL__", chandra_model)
 
-perf_commands.extend([
-    chandra_install_cmd,
-    "pip install --upgrade vllm",  # Ensure vllm is installed
-    "pip install awscli",
-    "aws s3 cp --recursive s3://ai2-oe-data/jakep/olmocr/olmOCR-mix-0225/benchmark_set/ /root/olmOCR-mix-0225_benchmark_set/",
-    f"bash -c '{perf_shell}'"
-])
+    perf_commands.extend([
+        chandra_install_cmd,
+        "pip install --upgrade vllm",  # Ensure vllm is installed
+        "pip install awscli",
+        "aws s3 cp --recursive s3://ai2-oe-data/jakep/olmocr/olmOCR-mix-0225/benchmark_set/ /root/olmOCR-mix-0225_benchmark_set/",
+        f"bash -c '{perf_shell}'"
+    ])
 
-# Build performance task spec
-perf_task_spec_args = {
-    "name": "chandra-performance",
-    "image": ImageSource(beaker=f"{beaker_user}/{image_tag}"),
-    "command": [
-        "bash", "-c",
-        " && ".join(perf_commands)
-    ],
-    "context": TaskContext(
-        priority=Priority.normal,
-        preemptible=True,
-    ),
-    "resources": TaskResources(gpu_count=1),
-    "constraints": Constraints(cluster=["ai2/ceres-cirrascale", "ai2/jupiter-cirrascale-2"]),
-    "result": ResultSpec(path="/noop-results"),
-}
+    # Build performance task spec
+    perf_task_spec_args = {
+        "name": "chandra-performance",
+        "image": BeakerImageSource(beaker=image_ref),
+        "command": [
+            "bash", "-c",
+            " && ".join(perf_commands)
+        ],
+        "context": BeakerTaskContext(
+            priority=BeakerJobPriority["normal"],
+            preemptible=True,
+        ),
+        # Need to reserve all 8 gpus for performance spec or else benchmark results can be off (1 for titan-cirrascale)
+        "resources": BeakerTaskResources(gpu_count=1 if cluster == "ai2/titan-cirrascale" else 8),
+        "constraints": BeakerConstraints(cluster=[cluster] if cluster else ["ai2/ceres-cirrascale", "ai2/jupiter-cirrascale-2"]),
+        "result": BeakerResultSpec(path="/noop-results"),
+    }
 
-# Add env vars if AWS credentials or HF token exist
-env_vars = []
-if has_aws_creds:
-    env_vars.append(EnvVar(name="AWS_CREDENTIALS_FILE", secret=aws_creds_secret))
-if has_hf_token:
-    env_vars.append(EnvVar(name="HF_TOKEN", secret=hf_token_secret))
-if env_vars:
-    perf_task_spec_args["env_vars"] = env_vars
+    # Add env vars if AWS credentials or HF token exist
+    env_vars = []
+    if has_aws_creds:
+        env_vars.append(BeakerEnvVar(name="AWS_CREDENTIALS_FILE", secret=aws_creds_secret))
+    if has_hf_token:
+        env_vars.append(BeakerEnvVar(name="HF_TOKEN", secret=hf_token_secret))
+    if env_vars:
+        perf_task_spec_args["env_vars"] = env_vars
 
-# Create performance experiment spec
-perf_experiment_spec = ExperimentSpec(
-    description=f"Chandra {chandra_version_label} Performance Test - Branch: {git_branch}, Commit: {git_hash}",
-    budget="ai2/oe-base",
-    tasks=[TaskSpec(**perf_task_spec_args)],
-)
+    # Create performance experiment spec
+    perf_experiment_spec = BeakerExperimentSpec(
+        description=f"Chandra {chandra_version_label} Performance Test - Branch: {git_branch}, Commit: {git_hash}",
+        budget="ai2/oe-base",
+        tasks=[BeakerTaskSpec(**perf_task_spec_args)],
+    )
 
-# Create the performance experiment
-perf_experiment = b.experiment.create(spec=perf_experiment_spec, workspace="ai2/olmocr")
-print(f"Created performance experiment: {perf_experiment.id}")
-print(f"View at: https://beaker.org/ex/{perf_experiment.id}")
+    # Create the performance experiment
+    perf_workload = b.experiment.create(spec=perf_experiment_spec, workspace="ai2/olmocr")
+    print(f"Created performance experiment: {perf_workload.experiment.id}")
+    print(f"View at: https://beaker.org/ex/{perf_workload.experiment.id}")
+else:
+    print("Skipping performance test (--noperf flag specified)")
 EOF
 
 # Run the Python script to create the experiments
@@ -454,6 +513,21 @@ fi
 if [ -n "$BENCH_PATH" ]; then
     echo "Using bench path: $BENCH_PATH"
     CMD="$CMD --benchpath \"$BENCH_PATH\""
+fi
+
+if [ -n "$CLUSTER" ]; then
+    echo "Using cluster: $CLUSTER"
+    CMD="$CMD --cluster $CLUSTER"
+fi
+
+if [ -n "$NOPERF" ]; then
+    echo "Skipping performance tests"
+    CMD="$CMD --noperf"
+fi
+
+if [ -n "$MODEL" ]; then
+    echo "Using model: $MODEL"
+    CMD="$CMD --model $MODEL"
 fi
 
 eval $CMD
