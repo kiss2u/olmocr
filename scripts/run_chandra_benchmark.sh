@@ -334,7 +334,7 @@ else:
 
 commands.extend([
     chandra_install_cmd,
-    "uv pip uninstall --system flashinfer flashinfer-python flashinfer-cubin || true",
+    "uv pip uninstall --system vllm flashinfer flashinfer-python flashinfer-cubin || true",
     "uv pip install --system vllm --torch-backend=auto",
     run_chandra_shell,
     "python -m olmocr.bench.benchmark --dir ./olmOCR-bench/bench_data --candidate chandra"
@@ -435,7 +435,7 @@ wait $VLLM_PID 2>/dev/null || true
     perf_commands.extend([
         "pip install uv",
         chandra_install_cmd,
-        "uv pip uninstall --system flashinfer flashinfer-python flashinfer-cubin || true",
+        "uv pip uninstall --system vllm flashinfer flashinfer-python flashinfer-cubin || true",
         "uv pip install --system vllm --torch-backend=auto",
         "uv pip install --system awscli",
         "aws s3 cp --recursive s3://ai2-oe-data/jakep/olmocr/olmOCR-mix-0225/benchmark_set/ /root/olmOCR-mix-0225_benchmark_set/",
