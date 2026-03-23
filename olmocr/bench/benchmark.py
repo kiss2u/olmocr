@@ -191,9 +191,7 @@ def main():
     parser.add_argument(
         "--output_failed", type=str, default=None, help="Output a JSONL file containing tests that failed across all candidates. Provide a filename."
     )
-    parser.add_argument(
-        "--max_reports", type=int, default=None, help="Limit the HTML report to at most N unique PDFs per .jsonl file."
-    )
+    parser.add_argument("--max_reports", type=int, default=None, help="Limit the HTML report to at most N unique PDFs per .jsonl file.")
     args = parser.parse_args()
 
     input_folder = args.dir if os.path.isdir(args.dir) else os.path.dirname(args.dir)

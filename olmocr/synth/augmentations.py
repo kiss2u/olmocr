@@ -27,19 +27,14 @@ async def densify_html(client, html_content):
                 {
                     "role": "user",
                     "content": [
-                        {
-                            "type": "text",
-                            "text": html_content
-                        },
-
-
+                        {"type": "text", "text": html_content},
                         {
                             "type": "text",
                             "text": "The HTML above describes a webpage meant to render into a single printed PDF page. Please output a new full synthetic webpage that increases the amount of information on this page by 2X. "
                             "Your goal is to shrink the font size and add more synthetic content so that the general idea and structure of the page is preserved, but so that it contains twice as many final tokens. "
                             "Be careful to adjust any elements (such as footers) so that they will not overlap the main body of the newly expanded document. "
                             "But remember that it still needs to render as a single static HTML page that will print out to ONE page on a printer or in PDF form. "
-                            "Output the complete revised HTML in a ```html code block."
+                            "Output the complete revised HTML in a ```html code block.",
                         },
                     ],
                 }
@@ -100,21 +95,21 @@ def apply_jpeg_compression(pdf_path, quality, temp_dir):
         # Open the PNG and convert to JPEG with specified quality
         with Image.open(png_buffer) as img:
             # Convert RGBA to RGB if necessary
-            if img.mode in ('RGBA', 'LA', 'P'):
-                rgb_img = Image.new('RGB', img.size, (255, 255, 255))
+            if img.mode in ("RGBA", "LA", "P"):
+                rgb_img = Image.new("RGB", img.size, (255, 255, 255))
                 # Paste using alpha channel as mask if available
-                if img.mode == 'RGBA' or img.mode == 'LA':
-                    rgb_img.paste(img, mask=img.split()[-1] if img.mode == 'RGBA' else img.split()[1])
+                if img.mode == "RGBA" or img.mode == "LA":
+                    rgb_img.paste(img, mask=img.split()[-1] if img.mode == "RGBA" else img.split()[1])
                 else:
                     rgb_img.paste(img)
                 img = rgb_img
 
             # Save as JPEG with specified quality
-            img.save(temp_jpeg_path, 'JPEG', quality=quality, optimize=True)
+            img.save(temp_jpeg_path, "JPEG", quality=quality, optimize=True)
 
             # Convert JPEG back to PDF
             img_for_pdf = Image.open(temp_jpeg_path)
-            img_for_pdf.save(temp_pdf_path, 'PDF', resolution=100.0)
+            img_for_pdf.save(temp_pdf_path, "PDF", resolution=100.0)
 
         # Replace original PDF with compressed version
         os.replace(temp_pdf_path, pdf_path)
@@ -130,9 +125,31 @@ def apply_jpeg_compression(pdf_path, quality, temp_dir):
         return False
 
 
-_SKIP_ANCESTORS = frozenset({"header", "footer", "table", "thead", "tbody", "tfoot", "tr", "td", "th",
-                              "h1", "h2", "h3", "h4", "h5", "h6", "sup", "sub",
-                              "script", "style", "code", "pre"})
+_SKIP_ANCESTORS = frozenset(
+    {
+        "header",
+        "footer",
+        "table",
+        "thead",
+        "tbody",
+        "tfoot",
+        "tr",
+        "td",
+        "th",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "sup",
+        "sub",
+        "script",
+        "style",
+        "code",
+        "pre",
+    }
+)
 _SKIP_CLASSES = frozenset({"page-header", "page-footer", "page-number"})
 
 
@@ -210,6 +227,7 @@ def introduce_text_errors(html_content: str, random_gen: random.Random, num_erro
 
     # Group selected candidates by text node so we can replace right-to-left
     from collections import defaultdict
+
     node_edits: Dict[NavigableString, list] = defaultdict(list)
     typo_records: List[Dict[str, str]] = []
 

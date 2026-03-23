@@ -2,7 +2,6 @@ import argparse
 import base64
 import json
 import logging
-import multiprocessing
 import re
 import shutil
 from abc import ABC, abstractmethod
@@ -22,7 +21,6 @@ from typing import (
 
 import numpy as np
 import torch
-import yaml
 from PIL import Image
 from pypdf import PdfReader
 from torch.utils.data import Dataset

@@ -301,13 +301,15 @@ th, td { border: 1px solid #999; padding: 1px 2px; text-align: center; white-spa
         results = asyncio.run(detect_cutoff_text(html, 1024, 724))
         # At minimum, some of the wide table content should be flagged
         self.assertGreater(
-            len(results), 0,
+            len(results),
+            0,
             "Should detect cutoff in the wide table within narrow grid column",
         )
 
     def test_real_poster_html(self):
         """Test with the actual poster HTML file if it exists."""
         import os
+
         poster_path = "/home/ubuntu/olmocr/synth_testposter1/html/synthetic/pdf_00000_page1.html"
         if not os.path.exists(poster_path):
             self.skipTest("Poster HTML file not available")
@@ -320,14 +322,10 @@ th, td { border: 1px solid #999; padding: 1px 2px; text-align: center; white-spa
         self.assertGreater(len(results), 0, "Should detect cutoff in real poster HTML")
 
         # At least some table-related content should be flagged
-        has_table_cutoff = any(
-            r.tag in ("TH", "TD") and r.visible_ratio < 0.9
-            for r in results
-        )
+        has_table_cutoff = any(r.tag in ("TH", "TD") and r.visible_ratio < 0.9 for r in results)
         self.assertTrue(
             has_table_cutoff,
-            f"Expected table cell cutoff detection. Clipped elements: "
-            f"{[(r.tag, r.text[:50], r.visible_ratio) for r in results[:10]]}",
+            f"Expected table cell cutoff detection. Clipped elements: " f"{[(r.tag, r.text[:50], r.visible_ratio) for r in results[:10]]}",
         )
 
 
@@ -431,7 +429,7 @@ class TestExtractViewportFromHtml(unittest.TestCase):
 
     def test_no_viewport_meta(self):
         """No viewport meta tag — both width and height use defaults."""
-        html = '<html><head></head><body><p>Hello</p></body></html>'
+        html = "<html><head></head><body><p>Hello</p></body></html>"
         w, h = extract_viewport_from_html(html)
         self.assertEqual(w, 1024)
         self.assertEqual(h, 100000)
@@ -506,7 +504,8 @@ body { margin: 0; width: 400px; height: 300px; position: relative; }
         results = asyncio.run(detect_cutoff_text(html, 400, 300))
         occluded = [r for r in results if r.is_occluded]
         self.assertEqual(
-            len(occluded), 0,
+            len(occluded),
+            0,
             f"Transparent watermark should not flag occlusion, got: {[r.text for r in occluded]}",
         )
 
@@ -546,9 +545,7 @@ body { margin: 0; width: 400px; height: 600px; }
 </div>
 </body></html>"""
         with tempfile.TemporaryDirectory() as td:
-            result = asyncio.run(
-                render_pdf_with_playwright(html, os.path.join(td, "test.pdf"), 400, 600)
-            )
+            result = asyncio.run(render_pdf_with_playwright(html, os.path.join(td, "test.pdf"), 400, 600))
         self.assertFalse(result.success)
         self.assertTrue(result.has_cutoff)
         self.assertGreater(len(result.cutoff_elements), 0)
@@ -565,9 +562,7 @@ body { margin: 0; padding: 10px; width: 400px; }
 </body></html>"""
         with tempfile.TemporaryDirectory() as td:
             pdf_path = os.path.join(td, "test.pdf")
-            result = asyncio.run(
-                render_pdf_with_playwright(html, pdf_path, 400, 600)
-            )
+            result = asyncio.run(render_pdf_with_playwright(html, pdf_path, 400, 600))
         self.assertTrue(result.success)
         self.assertFalse(result.has_cutoff)
         self.assertIsNotNone(result.scale_used)

@@ -38,16 +38,16 @@ from olmocr.data.renderpdf import (
     render_pdf_to_base64png,
 )
 from olmocr.filter.filter import Language, PdfFilter
-from olmocr.synth.cutoff_detection import (
-    RenderResult,
-    _detect_cutoff_on_page,
-    has_significant_cutoff,
-)
 from olmocr.synth.claude_client import (
     DEFAULT_MODEL_NAME,
     call_claude,
     claude_stream,
     extract_code_block,
+)
+from olmocr.synth.cutoff_detection import (
+    RenderResult,
+    _detect_cutoff_on_page,
+    has_significant_cutoff,
 )
 
 # Global variables for tracking Claude API costs
@@ -638,8 +638,6 @@ async def generate_html_from_image(client, image_base64):
     except Exception as e:
         print(f"Error calling Claude API: {e}")
         return None
-    
-
 
 
 def extract_page_from_pdf(input_path, output_path, page_num):
@@ -748,9 +746,7 @@ async def render_pdf_with_playwright(html_content, output_pdf_path, png_width, p
 
         try:
             # Phase 1: Cutoff detection at original viewport size
-            check_page = await browser.new_page(
-                viewport={"width": png_width, "height": png_height}
-            )
+            check_page = await browser.new_page(viewport={"width": png_width, "height": png_height})
             await check_page.set_content(html_content, wait_until="load")
             await _load_katex_on_page(check_page)
 
@@ -1746,8 +1742,6 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
     return unique_tests
 
 
-
-
 def check_outputs_exist(pdf_id: str, page_num: int, args, existing_test_pdfs: set) -> bool:
     """
     Check if all output files for a given PDF already exist.
@@ -1956,11 +1950,7 @@ async def process_pdf(pdf_info, args, client, pdf_filter=None, existing_test_pdf
 
                     from olmocr.synth.augmentations import apply_jpeg_compression
 
-                    compression_success = apply_jpeg_compression(
-                        playwright_pdf_path,
-                        jpeg_quality,
-                        temp_pdf_dir
-                    )
+                    compression_success = apply_jpeg_compression(playwright_pdf_path, jpeg_quality, temp_pdf_dir)
 
                     if compression_success:
                         print(f"Successfully applied JPEG compression with quality {jpeg_quality}")
@@ -2114,7 +2104,9 @@ async def main():
     parser.add_argument("--verbose", action="store_true", help="Enable verbose output including table test verification")
     parser.add_argument("--densify", action="store_true", help="Set to ask claude to double the density of information on this page synthetically")
     parser.add_argument("--jpegify", action="store_true", help="Apply JPEG compression to rendered PDFs with random quality (70-95)")
-    parser.add_argument("--introduce-text-errors", type=int, default=0, help="Introduce N intentional typos into HTML body text and generate corresponding presence tests")
+    parser.add_argument(
+        "--introduce-text-errors", type=int, default=0, help="Introduce N intentional typos into HTML body text and generate corresponding presence tests"
+    )
     parser.add_argument("--filter", action="store_true", help="Apply PDF filtering to remove forms, spam, and non-English content")
     parser.add_argument("--name", default="synthetic", help="Name for the output JSONL file and subfolder (default: synthetic)")
     args = parser.parse_args()

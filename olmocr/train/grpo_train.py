@@ -31,7 +31,7 @@ from transformers import (
 )
 from trl import GRPOConfig, GRPOTrainer
 
-from olmocr.bench.table_parsing import parse_html_tables, parse_markdown_tables
+from olmocr.bench.table_parsing import parse_html_tables
 from olmocr.bench.tests import load_single_test
 from olmocr.data.renderpdf import render_pdf_to_base64png
 from olmocr.prompts import PageResponse, build_no_anchoring_v4_yaml_prompt
@@ -66,7 +66,7 @@ class DetailedRewardLogger:
             "total_completions": 0,
             "by_type": defaultdict(_make_type_stats),
             "by_jsonl": defaultdict(_make_type_stats),
-            "overall": {"passed": 0, "total": 0}
+            "overall": {"passed": 0, "total": 0},
         }
 
     def add_batch_stats(self, batch_detailed_stats: List[Optional[Dict]]):
@@ -101,33 +101,23 @@ class DetailedRewardLogger:
 
     def get_summary_stats(self) -> Dict:
         """Get summary statistics for logging."""
-        summary = {
-            "bench_reward/total_completions": self.accumulated_stats["total_completions"]
-        }
+        summary = {"bench_reward/total_completions": self.accumulated_stats["total_completions"]}
 
         # Overall pass rate
         if self.accumulated_stats["overall"]["total"] > 0:
-            summary["bench_reward/overall_pass_rate"] = (
-                self.accumulated_stats["overall"]["passed"] / self.accumulated_stats["overall"]["total"]
-            )
+            summary["bench_reward/overall_pass_rate"] = self.accumulated_stats["overall"]["passed"] / self.accumulated_stats["overall"]["total"]
 
         # Calculate average pass rates by type
         for test_type, stats in self.accumulated_stats["by_type"].items():
             if stats["total_tests"] > 0:
-                summary[f"bench_reward/{test_type}/pass_rate"] = (
-                    stats["total_passed"] / stats["total_tests"]
-                )
+                summary[f"bench_reward/{test_type}/pass_rate"] = stats["total_passed"] / stats["total_tests"]
                 summary[f"bench_reward/{test_type}/total_tests"] = stats["total_tests"]
-                summary[f"bench_reward/{test_type}/avg_tests_per_completion"] = (
-                    stats["total_tests"] / max(stats["completion_count"], 1)
-                )
+                summary[f"bench_reward/{test_type}/avg_tests_per_completion"] = stats["total_tests"] / max(stats["completion_count"], 1)
 
         # Calculate average pass rates by JSONL file
         for jsonl_name, stats in self.accumulated_stats["by_jsonl"].items():
             if stats["total_tests"] > 0:
-                summary[f"bench_reward/jsonl_{jsonl_name}/pass_rate"] = (
-                    stats["total_passed"] / stats["total_tests"]
-                )
+                summary[f"bench_reward/jsonl_{jsonl_name}/pass_rate"] = stats["total_passed"] / stats["total_tests"]
                 summary[f"bench_reward/jsonl_{jsonl_name}/total_tests"] = stats["total_tests"]
 
         return summary
@@ -137,7 +127,7 @@ class DetailedRewardLogger:
         summary = {
             "by_type": defaultdict(lambda: {"passed": 0, "total": 0, "count": 0}),
             "by_jsonl": defaultdict(lambda: {"passed": 0, "total": 0, "count": 0}),
-            "overall": {"passed": 0, "total": 0}
+            "overall": {"passed": 0, "total": 0},
         }
 
         for stats in batch_detailed_stats:
@@ -214,7 +204,7 @@ class DetailedRewardLogger:
         self._gather_across_ranks()
         if is_main_process():
             summary = self.get_summary_stats()
-            wandb.log(summary) # Don't pass in step to wandb, or else it can get confused
+            wandb.log(summary)  # Don't pass in step to wandb, or else it can get confused
             logger.info(f"Logged detailed reward stats at step {step}")
 
             # Log a formatted summary to console
@@ -224,7 +214,9 @@ class DetailedRewardLogger:
 
             if self.accumulated_stats["overall"]["total"] > 0:
                 overall_rate = self.accumulated_stats["overall"]["passed"] / self.accumulated_stats["overall"]["total"]
-                logger.info(f"Overall pass rate: {overall_rate:.3%} ({self.accumulated_stats['overall']['passed']}/{self.accumulated_stats['overall']['total']})")
+                logger.info(
+                    f"Overall pass rate: {overall_rate:.3%} ({self.accumulated_stats['overall']['passed']}/{self.accumulated_stats['overall']['total']})"
+                )
 
             logger.info("\nBreakdown by test type:")
             for test_type in sorted(self.accumulated_stats["by_type"].keys()):
@@ -251,7 +243,7 @@ class DetailedRewardLoggingCallback(TrainerCallback):
 
     def on_log(self, args, state, control, logs=None, **kwargs):
         """Called when trainer logs metrics."""
-        if hasattr(detailed_reward_logger, 'accumulated_stats'):
+        if hasattr(detailed_reward_logger, "accumulated_stats"):
             detailed_reward_logger.log_to_wandb(state.global_step)
             detailed_reward_logger.clear()
 
@@ -267,7 +259,7 @@ class S3SyncCallback(TrainerCallback):
             s3_save_path: S3 path to sync checkpoints to (e.g., s3://bucket/path/)
             output_dir: Local output directory containing checkpoints
         """
-        self.s3_save_path = s3_save_path.rstrip('/') + '/'
+        self.s3_save_path = s3_save_path.rstrip("/") + "/"
         self.output_dir = output_dir
 
     def _sync_to_s3(self):
@@ -279,22 +271,19 @@ class S3SyncCallback(TrainerCallback):
                 "s5cmd",
                 "sync",
                 "--delete",
-                "--exclude", "*.lock",  # Exclude lock files
-                "--exclude", ".git/*",   # Exclude git files if any
+                "--exclude",
+                "*.lock",  # Exclude lock files
+                "--exclude",
+                ".git/*",  # Exclude git files if any
                 f"{self.output_dir}/*",
-                self.s3_save_path
+                self.s3_save_path,
             ]
 
             logger.info(f"Syncing entire output directory to S3: {self.output_dir} -> {self.s3_save_path}")
             logger.debug(f"Running command: {' '.join(cmd)}")
 
             # Run s5cmd
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=60*25  # 25 minute timeout
-            )
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60 * 25)  # 25 minute timeout
 
             if result.returncode == 0:
                 logger.info(f"Successfully synced to S3: {self.s3_save_path}")
@@ -635,7 +624,7 @@ def evaluate_single_completion(args: Tuple[int, Any, str, str, List[str]]) -> Tu
 
         # Filter tests by type if bench_type_filter is set
         if _bench_type_filter:
-            relevant_tests = [t for t in relevant_tests if getattr(t, 'type', 'unknown') in _bench_type_filter]
+            relevant_tests = [t for t in relevant_tests if getattr(t, "type", "unknown") in _bench_type_filter]
             if not relevant_tests:
                 logger.warning(f"No tests remaining after type filter {_bench_type_filter} for completion {i}")
                 return i, None, None
@@ -648,7 +637,7 @@ def evaluate_single_completion(args: Tuple[int, Any, str, str, List[str]]) -> Tu
 
         for test in relevant_tests:
             # Get test type from the test object
-            test_type = getattr(test, 'type', 'unknown')
+            test_type = getattr(test, "type", "unknown")
             stats_by_type[test_type]["total"] += 1
 
             try:
@@ -675,7 +664,7 @@ def evaluate_single_completion(args: Tuple[int, Any, str, str, List[str]]) -> Tu
             "by_type": dict(stats_by_type),  # Convert defaultdict to regular dict for serialization
             "reward": overall_reward,
             "pdf_path": comp_pdf_path,
-            "jsonl_file": comp_jsonl_file
+            "jsonl_file": comp_jsonl_file,
         }
 
         logger.info(f"Completion {i}: {overall_stats['passed']}/{overall_stats['total']} tests passed, reward={overall_reward:.3f}")
@@ -1049,9 +1038,7 @@ def reward_rect_tables(prompts, completions: list[str] | list[list[dict]], **kwa
         # Each rectangular table contributes 1/N to the reward
         reward = rect_count / total_tables
 
-        logger.debug(
-            f"Completion {i}: {rect_count}/{total_tables} rectangular HTML tables, reward={reward:.3f}"
-        )
+        logger.debug(f"Completion {i}: {rect_count}/{total_tables} rectangular HTML tables, reward={reward:.3f}")
 
         rewards.append(reward)
 
@@ -1186,7 +1173,9 @@ def olmocr_bench_reward(
         batch_summary = detailed_reward_logger.get_batch_summary(detailed_stats)
         logger.info(f"Batch summary ({avg_type}):")
         if batch_summary["overall"]["total"] > 0:
-            logger.info(f"  Overall (micro): {batch_summary['overall']['pass_rate']:.3f} ({batch_summary['overall']['passed']}/{batch_summary['overall']['total']})")
+            logger.info(
+                f"  Overall (micro): {batch_summary['overall']['pass_rate']:.3f} ({batch_summary['overall']['passed']}/{batch_summary['overall']['total']})"
+            )
 
         # Log by test type (useful for understanding macro-average)
         if batch_summary["by_type"]:
@@ -1264,13 +1253,7 @@ def main():
         choices=["group", "batch", "none"],
         help="Scaling strategy for rewards: 'group' (scale by std within each group), 'batch' (scale by std across batch), or 'none' (no scaling). Default: 'group'",
     )
-    parser.add_argument(
-        "--lr_schedule",
-        type=str,
-        default="linear",
-        choices=["linear", "constant"],
-        help="Choose learning rate schedule type"
-    )
+    parser.add_argument("--lr_schedule", type=str, default="linear", choices=["linear", "constant"], help="Choose learning rate schedule type")
     parser.add_argument("--beta", type=float, default=0.0, help="KL coefficient for reference model (default: 0.0, no reference model)")
     parser.add_argument(
         "--importance_sampling_level", type=str, default="token", choices=["token", "sequence"], help="Level for importance sampling ratios (default: token)"
@@ -1344,13 +1327,9 @@ def main():
         "--s3_save_path",
         type=str,
         default=None,
-        help="S3 path to sync checkpoints to (e.g., s3://bucket/path/). If provided, will sync checkpoints to S3 using s5cmd after each save."
+        help="S3 path to sync checkpoints to (e.g., s3://bucket/path/). If provided, will sync checkpoints to S3 using s5cmd after each save.",
     )
-    parser.add_argument(
-        "--resume_from_checkpoint",
-        action="store_true",
-        help="Resume training from the latest checkpoint in output_dir if one exists"
-    )
+    parser.add_argument("--resume_from_checkpoint", action="store_true", help="Resume training from the latest checkpoint in output_dir if one exists")
 
     args = parser.parse_args()
 
@@ -1449,10 +1428,7 @@ def main():
     if args.reward_bench_macroavg is not None:
         # Create a wrapper function that calls olmocr_bench_reward with macro_average=True
         def olmocr_bench_reward_macroavg(prompts, completions, completion_ids, pdf_path, jsonl_file, test_ids, **kwargs):
-            return olmocr_bench_reward(
-                prompts, completions, completion_ids, pdf_path, jsonl_file, test_ids,
-                macro_average=True, **kwargs
-            )
+            return olmocr_bench_reward(prompts, completions, completion_ids, pdf_path, jsonl_file, test_ids, macro_average=True, **kwargs)
 
         olmocr_bench_reward_macroavg.__name__ = "olmocr_bench_reward_macroavg"
         reward_funcs.append(olmocr_bench_reward_macroavg)

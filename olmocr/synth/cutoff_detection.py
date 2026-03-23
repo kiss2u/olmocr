@@ -319,9 +319,7 @@ def _parse_occlusion_data(occlusion_data: list) -> List[CutoffElement]:
     ]
 
 
-async def _detect_cutoff_on_page(
-    page, visibility_threshold: float
-) -> List[CutoffElement]:
+async def _detect_cutoff_on_page(page, visibility_threshold: float) -> List[CutoffElement]:
     """Run overflow-clipping and occlusion detection on an already-loaded Playwright page."""
     cutoff_data = await page.evaluate(_CUTOFF_JS, visibility_threshold)
     occlusion_data = await page.evaluate(_OCCLUSION_JS)
@@ -353,9 +351,7 @@ async def detect_cutoff_text(
     """
     async with async_playwright() as p:
         browser = await p.chromium.launch()
-        page = await browser.new_page(
-            viewport={"width": viewport_width, "height": viewport_height}
-        )
+        page = await browser.new_page(viewport={"width": viewport_width, "height": viewport_height})
         await page.set_content(html_content, wait_until="load")
         results = await _detect_cutoff_on_page(page, visibility_threshold)
         await browser.close()
@@ -411,8 +407,7 @@ def extract_viewport_from_html(html_content: str) -> tuple:
     width = 1024
     height = 100000
     meta_match = re.search(
-        r'<meta\s[^>]*name=["\']viewport["\'][^>]*content=["\']([^"\']*)["\']'
-        r'|<meta\s[^>]*content=["\']([^"\']*)["\'][^>]*name=["\']viewport["\']',
+        r'<meta\s[^>]*name=["\']viewport["\'][^>]*content=["\']([^"\']*)["\']' r'|<meta\s[^>]*content=["\']([^"\']*)["\'][^>]*name=["\']viewport["\']',
         html_content,
         re.IGNORECASE,
     )
@@ -456,15 +451,11 @@ async def classify_html_files(
                     html_content = f.read()
 
                 vw, vh = extract_viewport_from_html(html_content)
-                page = await browser.new_page(
-                    viewport={"width": vw, "height": vh}
-                )
+                page = await browser.new_page(viewport={"width": vw, "height": vh})
                 await page.set_content(html_content, wait_until="load")
 
                 elements = await _detect_cutoff_on_page(page, visibility_threshold)
-                is_cutoff = has_significant_cutoff(
-                    elements, min_text_length, max_visible_ratio
-                )
+                is_cutoff = has_significant_cutoff(elements, min_text_length, max_visible_ratio)
 
                 if is_cutoff:
                     dest = os.path.join(cutoff_dir, filename)
@@ -490,13 +481,15 @@ async def classify_html_files(
                 if is_cutoff:
                     # Show the worst occluded element if any, otherwise worst clipped
                     occluded = [e for e in elements if e.is_occluded and len(e.text.strip()) >= min_text_length]
-                    clipped = [e for e in elements if not e.is_occluded and e.horizontal_visible_ratio <= max_visible_ratio and len(e.text.strip()) >= min_text_length]
+                    clipped = [
+                        e for e in elements if not e.is_occluded and e.horizontal_visible_ratio <= max_visible_ratio and len(e.text.strip()) >= min_text_length
+                    ]
                     if occluded:
                         worst = occluded[0]
-                        detail = f"  occluded: {worst.tag} by={worst.clipping_ancestor_tag} \"{worst.text[:60]}\""
+                        detail = f'  occluded: {worst.tag} by={worst.clipping_ancestor_tag} "{worst.text[:60]}"'
                     elif clipped:
                         worst = min(clipped, key=lambda e: e.horizontal_visible_ratio)
-                        detail = f"  clipped: {worst.tag} hvis={worst.horizontal_visible_ratio:.2f} \"{worst.text[:60]}\""
+                        detail = f'  clipped: {worst.tag} hvis={worst.horizontal_visible_ratio:.2f} "{worst.text[:60]}"'
                     else:
                         detail = ""
                 print(f"[{status:6s}] {filename}{detail}")
@@ -510,9 +503,7 @@ async def classify_html_files(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Sort HTML files into cutoff / no-cutoff directories based on overflow clipping detection."
-    )
+    parser = argparse.ArgumentParser(description="Sort HTML files into cutoff / no-cutoff directories based on overflow clipping detection.")
     parser.add_argument(
         "input_dir",
         help="Directory containing HTML files to classify.",

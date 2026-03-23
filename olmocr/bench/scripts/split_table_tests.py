@@ -15,7 +15,6 @@ from pathlib import Path
 
 from olmocr.bench.tests import BasePDFTest, TableTest, TestType, load_tests
 
-
 # The relationship fields that can be split
 RELATIONSHIP_FIELDS = ["up", "down", "left", "right", "top_heading", "left_heading"]
 
@@ -116,16 +115,10 @@ def split_table_test(test: TableTest) -> list[dict]:
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Split table tests with multiple relationships into individual tests"
-    )
+    parser = argparse.ArgumentParser(description="Split table tests with multiple relationships into individual tests")
     parser.add_argument("input_file", help="Input JSONL file containing tests")
     parser.add_argument("output_file", help="Output JSONL file for split tests")
-    parser.add_argument(
-        "--keep-non-table",
-        action="store_true",
-        help="Keep non-table tests in the output (default: only output table tests)"
-    )
+    parser.add_argument("--keep-non-table", action="store_true", help="Keep non-table tests in the output (default: only output table tests)")
 
     args = parser.parse_args()
 
