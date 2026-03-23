@@ -81,10 +81,10 @@ fi
 
 if [ "$CHANDRA_VERSION" = "latest" ]; then
     echo "Using latest chandra-ocr release"
-    CHANDRA_INSTALL_CMD="uv pip install chandra-ocr"
+    CHANDRA_INSTALL_CMD="uv pip install --system chandra-ocr"
 else
     echo "Using chandra-ocr version: $CHANDRA_VERSION"
-    CHANDRA_INSTALL_CMD="uv pip install chandra-ocr==$CHANDRA_VERSION"
+    CHANDRA_INSTALL_CMD="uv pip install --system chandra-ocr==$CHANDRA_VERSION"
 fi
 
 # Check for mutual exclusivity between benchpath and benchrepo/benchbranch
@@ -327,7 +327,7 @@ if has_hf_token:
 
 # Install uv for fast dependency management, then s5cmd (needed for S3 operations)
 commands.append("pip install uv")
-commands.append("uv pip install s5cmd")
+commands.append("uv pip install --system s5cmd")
 
 # Handle benchmark data download based on source type
 if bench_path:
@@ -348,7 +348,7 @@ else:
 
 commands.extend([
     chandra_install_cmd,
-    "uv pip install --upgrade vllm",  # Ensure vllm is installed
+    "uv pip install --system --upgrade vllm",  # Ensure vllm is installed
     run_chandra_shell,
     "python -m olmocr.bench.benchmark --dir ./olmOCR-bench/bench_data --candidate chandra"
 ])
@@ -448,8 +448,8 @@ wait $VLLM_PID 2>/dev/null || true
     perf_commands.extend([
         "pip install uv",
         chandra_install_cmd,
-        "uv pip install --upgrade vllm",  # Ensure vllm is installed
-        "uv pip install awscli",
+        "uv pip install --system --upgrade vllm",  # Ensure vllm is installed
+        "uv pip install --system awscli",
         "aws s3 cp --recursive s3://ai2-oe-data/jakep/olmocr/olmOCR-mix-0225/benchmark_set/ /root/olmOCR-mix-0225_benchmark_set/",
         f"bash -c '{perf_shell}'"
     ])
