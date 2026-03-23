@@ -21,6 +21,8 @@ from typing import (
 )
 
 import numpy as np
+import torch
+import yaml
 from PIL import Image
 from pypdf import PdfReader
 from torch.utils.data import Dataset
@@ -932,6 +934,154 @@ class ReformatLatexBoldItalic(PipelineStep):
 
 
 @dataclass(frozen=True, slots=True)
+class TableTransformation(PipelineStep):
+    """Pipeline step that applies transformations to HTML tables in the natural text.
+
+    Supported transformations:
+    - "annotate_dims": Adds data-totalrows and data-totalcols attributes to each table
+      showing the total number of rows and columns.
+    - "firstrowpreview": Adds an HTML comment after the opening <table> tag showing
+      a preview of the first row that has the maximum number of columns.
+    """
+
+    transformation: str = "annotate_dims"  # The transformation to apply
+
+    def _firstrowpreview(self, text: str) -> str:
+        """Add an HTML comment showing a preview of the first data row."""
+        from olmocr.bench.table_parsing import parse_html_tables
+
+        # Find all HTML tables
+        table_pattern = re.compile(r"<table\b[^>]*>.*?</table>", re.IGNORECASE | re.DOTALL)
+        tables = table_pattern.findall(text)
+
+        if not tables:
+            return text
+
+        result = text
+        for table_html in tables:
+            # Parse the table to get its structure
+            parsed_tables = parse_html_tables(table_html)
+
+            if not parsed_tables:
+                continue
+
+            table_data = parsed_tables[0]
+
+            if not table_data.cell_text:
+                continue
+
+            # Get max columns
+            max_col = max(col for _, col in table_data.cell_text.keys()) + 1
+
+            # Group cells by row
+            rows_data: dict[int, dict[int, str]] = {}
+            for (row, col), cell_text in table_data.cell_text.items():
+                if row not in rows_data:
+                    rows_data[row] = {}
+                rows_data[row][col] = cell_text
+
+            # Find first row with max_col columns
+            preview_row_idx = None
+            preview_row_data = None
+            for row_idx in sorted(rows_data.keys()):
+                if len(rows_data[row_idx]) == max_col:
+                    preview_row_idx = row_idx
+                    preview_row_data = rows_data[row_idx]
+                    break
+
+            if preview_row_idx is None or preview_row_data is None:
+                continue
+
+            # Build the comment string
+            col_descriptions = []
+            for col_idx in sorted(preview_row_data.keys()):
+                cell_value = preview_row_data[col_idx].strip()
+                # Truncate long values
+                if len(cell_value) > 50:
+                    cell_value = cell_value[:47] + "..."
+                col_descriptions.append(f"Column {col_idx + 1}: {cell_value}")
+
+            comment = f"<!-- Sample row ({preview_row_idx + 1}): {', '.join(col_descriptions)} -->"
+
+            # Insert the comment after the opening <table> tag
+            table_open_match = re.match(r"<table\b[^>]*>", table_html, re.IGNORECASE)
+            if table_open_match:
+                table_open_tag = table_open_match.group(0)
+                new_table_html = table_html.replace(table_open_tag, table_open_tag + comment, 1)
+                result = result.replace(table_html, new_table_html, 1)
+
+        return result
+
+    def _annotate_dims(self, text: str) -> str:
+        """Add data-totalrows and data-totalcols attributes to HTML tables."""
+        from olmocr.bench.table_parsing import parse_html_tables
+
+        # Find all HTML tables
+        table_pattern = re.compile(r"<table\b[^>]*>.*?</table>", re.IGNORECASE | re.DOTALL)
+        tables = table_pattern.findall(text)
+
+        if not tables:
+            return text
+
+        result = text
+        for table_html in tables:
+            # Parse the table to get its structure
+            parsed_tables = parse_html_tables(table_html)
+
+            if not parsed_tables:
+                continue
+
+            table_data = parsed_tables[0]
+
+            # Get the max row and col from cell_text keys
+            if not table_data.cell_text:
+                continue
+
+            max_row = max(row for row, col in table_data.cell_text.keys()) + 1
+            max_col = max(col for row, col in table_data.cell_text.keys()) + 1
+
+            # Find the opening <table> tag and add the attributes
+            table_open_match = re.match(r"<table\b([^>]*)>", table_html, re.IGNORECASE)
+            if table_open_match:
+                existing_attrs = table_open_match.group(1)
+                new_attrs = f' data-totalrows="{max_row}" data-totalcols="{max_col}"'
+
+                # Check if attributes already exist
+                if "data-totalrows" not in existing_attrs.lower():
+                    new_table_open = f"<table{existing_attrs}{new_attrs}>"
+                    new_table_html = table_html.replace(table_open_match.group(0), new_table_open, 1)
+                    result = result.replace(table_html, new_table_html, 1)
+
+        return result
+
+    def __call__(self, sample: Sample) -> Optional[Sample]:
+        """Apply the specified transformation to HTML tables in the sample text."""
+        # Get the natural text from page_data if it exists
+        if "page_data" not in sample:
+            return sample
+
+        page_data = sample["page_data"]
+        if not hasattr(page_data, "natural_text") or not page_data.natural_text:
+            return sample
+
+        text = page_data.natural_text
+
+        # Apply the specified transformation
+        if self.transformation == "annotate_dims":
+            text = self._annotate_dims(text)
+        elif self.transformation == "firstrowpreview":
+            text = self._firstrowpreview(text)
+        else:
+            raise ValueError(f"Unknown table transformation: {self.transformation}")
+
+        # Create a new PageResponse with the updated text (since it's frozen)
+        updated_page_data = replace(page_data, natural_text=text)
+        sample["page_data"] = updated_page_data
+
+        return sample
+
+
+@dataclass(frozen=True, slots=True)
 class AugraphyBasicAugmentations(PipelineStep):
     """Pipeline step that applies a decent selection of augraphy augmentations to the data"""
 
@@ -1071,8 +1221,8 @@ class Tokenizer(PipelineStep):
 
     def __call__(self, sample: Sample) -> Sample:
         """Tokenize messages and create labels for training."""
-        if np is None:
-            raise ImportError("numpy is required for Tokenizer step")
+        if torch is None:
+            raise ImportError("torch is required for Tokenizer step")
 
         # Extract user message and response
         user_messages = sample["user_messages"]
@@ -1095,33 +1245,33 @@ class Tokenizer(PipelineStep):
             text=[text],
             images=[main_image],
             padding=True,
-            return_tensors="np",
+            return_tensors="pt",
         )
 
         # Get labels by tokenizing the output text
-        labels = self.processor(text=[response], padding=True, return_tensors="np")
+        labels = self.processor(text=[response], padding=True, return_tensors="pt")
 
         # Append end-of-message token to the labels
         end_tokens = self.processor.tokenizer(self.end_of_message_token, add_special_tokens=False)["input_ids"]
-        end_tokens = np.array(end_tokens, dtype=inputs.input_ids.dtype)
+        end_tokens = torch.tensor(end_tokens, dtype=inputs.input_ids.dtype)
 
         # Handle the case where labels['input_ids'] is empty
         if labels["input_ids"].shape[1] == 0:
-            labels_input_ids_0 = np.array([], dtype=inputs.input_ids.dtype)
+            labels_input_ids_0 = torch.tensor([], dtype=inputs.input_ids.dtype)
         else:
-            labels_input_ids_0 = labels["input_ids"][0].astype(inputs.input_ids.dtype)
+            labels_input_ids_0 = labels["input_ids"][0].to(inputs.input_ids.dtype)
 
-        labels["input_ids"] = np.concatenate([labels_input_ids_0, end_tokens])
-        labels["input_ids"] = np.expand_dims(labels["input_ids"], axis=0)
+        labels["input_ids"] = torch.cat([labels_input_ids_0, end_tokens])
+        labels["input_ids"] = labels["input_ids"].unsqueeze(0)
 
         # Concatenate input_ids and labels
-        input_ids = np.concatenate([inputs.input_ids[0], labels.input_ids[0]], axis=0)
+        input_ids = torch.cat([inputs.input_ids[0], labels.input_ids[0]], dim=0)
 
         # All columns will participate in attention fully
-        attention_mask = np.ones_like(input_ids)
+        attention_mask = torch.ones_like(input_ids)
 
         # Create labels, masking the input portion with -100
-        labels_full = np.full_like(input_ids, fill_value=self.masking_index)
+        labels_full = torch.full_like(input_ids, fill_value=self.masking_index)
         labels_full[len(inputs.input_ids[0]) :] = labels.input_ids[0]
 
         # Return as dict, including pixel_values
@@ -1149,25 +1299,25 @@ class RandomTokenFlipper(PipelineStep):
         if "labels" not in sample or "input_ids" not in sample:
             return sample
 
-        # Work with copies to avoid modifying original arrays
-        labels = sample["labels"].copy()
-        input_ids = sample["input_ids"].copy()
+        # Work with clones to avoid modifying original tensors
+        labels = sample["labels"].clone() if torch.is_tensor(sample["labels"]) else torch.tensor(sample["labels"])
+        input_ids = sample["input_ids"].clone() if torch.is_tensor(sample["input_ids"]) else torch.tensor(sample["input_ids"])
 
         # Find indices where labels are not masked (i.e., output tokens)
-        non_masked_indices = np.where(labels != self.masking_index)[0]
+        non_masked_indices = torch.where(labels != self.masking_index)[0]
 
         if len(non_masked_indices) == 0:
             return sample
 
         # For each non-masked token, independently decide whether to flip
         for idx in non_masked_indices:
-            if np.random.random() < self.token_flip_rate:
+            if torch.rand(1).item() < self.token_flip_rate:
                 # Pick a random token from the valid tokens list
-                random_token = np.random.choice(self.valid_token_ids)
+                random_token = self.valid_token_ids[torch.randint(len(self.valid_token_ids), (1,)).item()]
                 input_ids[idx] = random_token
                 labels[idx] = self.masking_index
 
-        # Update sample with modified arrays
+        # Update sample with modified tensors
         sample["input_ids"] = input_ids
         sample["labels"] = labels
 
@@ -1478,16 +1628,23 @@ if __name__ == "__main__":
             # Show label masking
             print(f"\nLabel masking analysis:")
             labels = sample["labels"]
-            masked_count = np.sum(labels == -100)
-            total_count = len(labels)
+            # Handle both numpy arrays and torch tensors
+            if torch.is_tensor(labels):
+                masked_count = (labels == -100).sum().item()
+                total_count = labels.numel()
+                labels_array = labels.cpu().numpy() if labels.is_cuda else labels.numpy()
+            else:
+                masked_count = np.sum(labels == -100)
+                total_count = len(labels)
+                labels_array = labels
             print(f"  Total tokens: {total_count}")
             print(f"  Masked tokens: {masked_count} ({masked_count/total_count*100:.1f}%)")
             print(f"  Unmasked tokens: {total_count - masked_count} ({(total_count - masked_count)/total_count*100:.1f}%)")
 
             # Find the transition point
             transition_idx = None
-            for i in range(len(labels) - 1):
-                if labels[i] == -100 and labels[i + 1] != -100:
+            for i in range(len(labels_array) - 1):
+                if labels_array[i] == -100 and labels_array[i + 1] != -100:
                     transition_idx = i + 1
                     break
 
@@ -1496,15 +1653,21 @@ if __name__ == "__main__":
 
             # Print all tokens
             input_ids = sample["input_ids"]
-            print(f"\nAll tokens ({len(input_ids)} total):")
+            # Handle both numpy arrays and torch tensors
+            if torch.is_tensor(input_ids):
+                input_ids_array = input_ids.cpu().numpy() if input_ids.is_cuda else input_ids.numpy()
+            else:
+                input_ids_array = input_ids
+
+            print(f"\nAll tokens ({len(input_ids_array)} total):")
             print("Format: [index] Token (repr) | Label | Token ID")
             print("-" * 80)
 
-            for i in range(len(input_ids)):
-                token = processor.tokenizer.decode([input_ids[i]])
+            for i in range(len(input_ids_array)):
+                token = processor.tokenizer.decode([int(input_ids_array[i])])
                 token_repr = repr(token)
-                label = labels[i] if i < len(labels) else "N/A"
-                token_id = input_ids[i]
+                label = labels_array[i] if i < len(labels_array) else "N/A"
+                token_id = int(input_ids_array[i])
 
                 # Mark special positions
                 marker = ""
@@ -1512,7 +1675,7 @@ if __name__ == "__main__":
                     marker = " <-- TRANSITION (first unmasked)"
                 elif i == 0:
                     marker = " <-- START"
-                elif label != -100 and i > 0 and labels[i - 1] == -100:
+                elif label != -100 and i > 0 and labels_array[i - 1] == -100:
                     marker = " <-- response begins"
 
                 print(f"[{i:4d}] {token_repr:20s} | {str(label):6s} | {token_id:6d}{marker}")
@@ -1523,7 +1686,7 @@ if __name__ == "__main__":
             # Count consecutive high-value tokens that represent the image
             # Qwen uses tokens like 151859, 151860, etc. for image patches
             image_token_threshold = 151000  # Typical threshold for Qwen image tokens
-            image_token_count = np.sum(input_ids > image_token_threshold)
+            image_token_count = np.sum(input_ids_array > image_token_threshold)
 
             # Calculate prompt tokens (everything masked)
             prompt_token_count = masked_count
@@ -1545,50 +1708,34 @@ if __name__ == "__main__":
             print(f"\n\n=== Analyzing token length distribution across entire dataset ===")
             print(f"Processing {len(dataset)} samples...")
 
-            # Function to process a single sample
-            def process_sample(idx):
-                try:
-                    current_sample = dataset[idx]
-                    if "labels" in current_sample:
-                        # Count total sequence length (all tokens, prompt + completion)
-                        labels = current_sample["labels"]
-                        total_length = len(labels)
-                        return (idx, total_length, None)
-                    return (idx, None, "No labels in sample")
-                except Exception as e:
-                    return (idx, None, str(e))
-
-            # Process samples in parallel with progress bar
+            # Process samples sequentially with progress bar
+            # (ProcessPoolExecutor doesn't work well here because the dataset
+            # and pipeline steps can't be easily pickled for multiprocessing)
             sequence_lengths = []
             max_sequence_length = 0
             max_sequence_sample_idx = 0
             errors = []
 
-            # Determine number of workers (use fewer workers to avoid memory issues)
-            import multiprocessing
-
-            num_workers = min(multiprocessing.cpu_count() // 2, 8)
-
-            with ProcessPoolExecutor(max_workers=num_workers) as executor:
-                # Submit all tasks
-                futures = {executor.submit(process_sample, idx): idx for idx in range(len(dataset))}
-
-                # Process results with progress bar
-                with tqdm(total=len(dataset), desc="Analyzing samples") as pbar:
-                    for future in as_completed(futures):
-                        idx = futures[future]
-                        try:
-                            idx, sequence_length, error = future.result()
-                            if error:
-                                errors.append((idx, error))
-                            elif sequence_length is not None:
-                                sequence_lengths.append(sequence_length)
-                                if sequence_length > max_sequence_length:
-                                    max_sequence_length = sequence_length
-                                    max_sequence_sample_idx = idx
-                        except Exception as e:
-                            errors.append((idx, f"Future error: {e}"))
-                        pbar.update(1)
+            for idx in tqdm(range(len(dataset)), desc="Analyzing samples"):
+                try:
+                    current_sample = dataset[idx]
+                    if current_sample is None:
+                        continue
+                    if "labels" in current_sample:
+                        # Count total sequence length (all tokens, prompt + completion)
+                        labels = current_sample["labels"]
+                        if torch.is_tensor(labels):
+                            total_length = labels.numel()
+                        else:
+                            total_length = len(labels)
+                        sequence_lengths.append(total_length)
+                        if total_length > max_sequence_length:
+                            max_sequence_length = total_length
+                            max_sequence_sample_idx = idx
+                    else:
+                        errors.append((idx, "No labels in sample"))
+                except Exception as e:
+                    errors.append((idx, str(e)))
 
             if errors:
                 print(f"\nEncountered {len(errors)} errors during processing")

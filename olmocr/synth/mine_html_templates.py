@@ -10,7 +10,7 @@ import re
 import subprocess
 import tempfile
 import uuid
-from collections import defaultdict
+from collections import Counter, defaultdict
 from typing import Dict, List
 
 import pypdf
@@ -20,13 +20,35 @@ from markdownify import SPACES, MarkdownConverter
 from playwright.async_api import async_playwright
 from syntok.segmenter import process
 from tqdm import tqdm
+from wordfreq import zipf_frequency
 
-from olmocr.bench.tests import TableTest, TestType, parse_html_tables
+from olmocr.bench.tests import (
+    BaselineTest,
+    FootnoteTest,
+    FormatTest,
+    TableTest,
+    TestType,
+    TextOrderTest,
+    TextPresenceTest,
+    normalize_text,
+    parse_html_tables,
+)
 from olmocr.data.renderpdf import (
     get_png_dimensions_from_base64,
     render_pdf_to_base64png,
 )
 from olmocr.filter.filter import Language, PdfFilter
+from olmocr.synth.cutoff_detection import (
+    RenderResult,
+    _detect_cutoff_on_page,
+    has_significant_cutoff,
+)
+from olmocr.synth.claude_client import (
+    DEFAULT_MODEL_NAME,
+    call_claude,
+    claude_stream,
+    extract_code_block,
+)
 
 # Global variables for tracking Claude API costs
 total_input_tokens = 0
@@ -153,9 +175,45 @@ def download_s3_pdf(path, local_path):
         return False
 
 
+def cleanup_headers_footers_soup(soup):
+    # Remove headers completely
+    for header in soup.find_all("header"):
+        header.decompose()
+
+    # For footers: remove direct text but keep footnote elements
+    for footer in soup.find_all("footer"):
+        # First, preserve all footnote elements (div, span, p with class="footnote")
+        footnote_elements = []
+        for tag_type in ["div", "span", "p"]:
+            footnote_elements.extend(footer.find_all(tag_type, class_="footnote"))
+
+        # Extract and temporarily store footnote elements
+        preserved_elements = []
+        for fn_element in footnote_elements:
+            # Extract the element from its current position
+            fn_element.extract()
+            preserved_elements.append(fn_element)
+
+        # Clear all content from the footer
+        footer.clear()
+
+        # Re-add only the footnote elements back to the footer
+        for fn_element in preserved_elements:
+            footer.append(fn_element)
+
+    # Remove any divs or spans with class "line-number"
+    for element in soup.find_all(["div", "span"], class_="line-number"):
+        element.extract()
+
+    # Remove any div or span watermarks
+    for element in soup.find_all(["div", "span"], class_="watermark"):
+        element.extract()
+
+
 class PreserveTablesConverter(MarkdownConverter):
     """
     Custom MarkdownConverter that preserves HTML tables unchanged
+    and preserves sup/sub tags as HTML
     """
 
     def convert_table(self, el, text, parent_tags):
@@ -166,6 +224,14 @@ class PreserveTablesConverter(MarkdownConverter):
         # Create a temporary soup with just this element to get its HTML
         temp_soup = BeautifulSoup(str(el), "html.parser")
         return str(temp_soup.table) if temp_soup.table else str(el)
+
+    def convert_sup(self, el, text, parent_tags):
+        # Always preserve sup tags as HTML
+        return f"<sup>{el.get_text()}</sup>"
+
+    def convert_sub(self, el, text, parent_tags):
+        # Always preserve sub tags as HTML
+        return f"<sub>{el.get_text()}</sub>"
 
 
 def extract_html_metadata(html_content):
@@ -248,10 +314,7 @@ def html_to_markdown_with_frontmatter(html_content):
         body_soup = soup
 
     # First, remove all header and footer elements from the body
-    for header in body_soup.find_all("header"):
-        header.decompose()
-    for footer in body_soup.find_all("footer"):
-        footer.decompose()
+    cleanup_headers_footers_soup(body_soup)
 
     # Also remove divs with page-header or page-footer classes (in case they weren't converted to header/footer tags)
     for div in body_soup.find_all("div", class_="page-header"):
@@ -266,8 +329,11 @@ def html_to_markdown_with_frontmatter(html_content):
         img_tag = body_soup.new_tag("img", src="page.png", alt=alt_text)
         img_div.replace_with(img_tag)
 
-    # Convert superscripts and subscripts to Unicode before markdown conversion
-    convert_superscripts_subscripts(body_soup)
+    # Handle SVG pictures in a similar way, just replace it as an image tag
+    for svg_tag in body_soup.find_all("svg"):
+        alt_text = "Graphic Placeholder"
+        img_tag = body_soup.new_tag("img", src="page.png", alt=alt_text)
+        svg_tag.replace_with(img_tag)
 
     # Get the modified HTML (only body content)
     modified_html = str(body_soup)
@@ -315,35 +381,6 @@ is_diagram: {metadata['is_diagram']}
         return frontmatter
 
 
-def extract_code_block(initial_response):
-    # Use regex to find the last instance of a code block
-    # First try to find HTML specific code blocks
-    html_blocks = re.findall(r"```html\n(.*?)```", initial_response, re.DOTALL)
-
-    # If HTML blocks found, return the last one
-    if html_blocks:
-        return html_blocks[-1].strip()
-
-    # Otherwise, try to find any code blocks
-    code_blocks = re.findall(r"```\n(.*?)```", initial_response, re.DOTALL)
-
-    # If code blocks found, return the last one
-    if code_blocks:
-        return code_blocks[-1].strip()
-
-    # If no code blocks found with newlines after backticks, try without newlines
-    html_blocks_no_newline = re.findall(r"```html(.*?)```", initial_response, re.DOTALL)
-    if html_blocks_no_newline:
-        return html_blocks_no_newline[-1].strip()
-
-    code_blocks_no_newline = re.findall(r"```(.*?)```", initial_response, re.DOTALL)
-    if code_blocks_no_newline:
-        return code_blocks_no_newline[-1].strip()
-
-    # Return empty string if no code blocks found
-    return None
-
-
 async def generate_html_from_image(client, image_base64):
     """Call Claude API to generate HTML from an image using a multi-step prompting strategy."""
     global total_input_tokens, total_output_tokens
@@ -352,8 +389,9 @@ async def generate_html_from_image(client, image_base64):
     try:
         # Step 0: Check that the orientation of the original document is right-side-up. If not, we will
         # skip this page, to keep the code simple
-        orientation_response = await client.messages.create(
-            model="claude-sonnet-4-5-20250929",
+        orientation_response = await call_claude(
+            client,
+            model=DEFAULT_MODEL_NAME,
             max_tokens=1000,
             temperature=0,
             messages=[
@@ -396,8 +434,9 @@ async def generate_html_from_image(client, image_base64):
             return None
 
         # Step 1: Initial analysis and column detection
-        analysis_response = await client.messages.create(
-            model="claude-sonnet-4-5-20250929",
+        analysis_response = await call_claude(
+            client,
+            model=DEFAULT_MODEL_NAME,
             max_tokens=20000,
             temperature=0.1,
             messages=[
@@ -435,8 +474,9 @@ async def generate_html_from_image(client, image_base64):
             total_output_tokens += analysis_response.usage.output_tokens
 
         # Step 2: Initial HTML generation with detailed layout instructions
-        initial_response = await client.messages.create(
-            model="claude-sonnet-4-5-20250929",
+        initial_response = await call_claude(
+            client,
+            model=DEFAULT_MODEL_NAME,
             max_tokens=20000,
             temperature=0.2,
             messages=[
@@ -453,10 +493,11 @@ async def generate_html_from_image(client, image_base64):
                             "2. Use the <header> and <footer> tags to represent content at the top/bottom which would not normally be part of the main content, such as page numbers, etc.\n"
                             "3. Use a placeholder <div> tag with class 'image' which will render as a grey box with black outline to make sure images have their original size, shape, and position on the page. Include an alt-text of the original image as a 'data-description' attribute on the tag. Include 'data-x', 'data-y', 'data-width', 'data-height' attributes which specify where the image was found in the original document.\n"
                             "4. Render any math equations and Latex inline using either \\[ \\] or \\( \\) delimeters.\n"
-                            "5. CRITICAL: If the document has a multi-column layout, you MUST preserve the exact same number of columns in your HTML. Use CSS flexbox or grid to create the columns.\n"
-                            "6. Focus on creating valid, accessible HTML that preserves the appearance and formatting of the original page as closely as possible.\n"
-                            f"7. The webpage will be viewed with a fixed viewport size of {png_width} pixels wide by {png_height} pixels tall.\n"
-                            "8. For multi-column layouts, use explicit CSS. The most important aspect is preserving the column structure of the original document - this is critical.\n\n"
+                            "5. Render any subscripts and superscripts in <sub> and <sup> tags, not in Unicode characters.\n"
+                            "6. CRITICAL: If the document has a multi-column layout, you MUST preserve the exact same number of columns in your HTML. Use CSS flexbox or grid to create the columns.\n"
+                            "7. Focus on creating valid, accessible HTML that preserves the appearance and formatting of the original page as closely as possible.\n"
+                            f"8. The webpage will be viewed with a fixed viewport size of {png_width} pixels wide by {png_height} pixels tall.\n"
+                            "9. For multi-column layouts, use explicit CSS. The most important aspect is preserving the column structure of the original document - this is critical.\n\n"
                             "Enclose your HTML in a ```html code block.",
                         },
                     ],
@@ -492,24 +533,36 @@ async def generate_html_from_image(client, image_base64):
 
         try:
             # Render HTML to PDF using existing function
-            render_success = await render_pdf_with_playwright(initial_html, tmp_pdf_path, png_width, png_height)
+            render_result = await render_pdf_with_playwright(initial_html, tmp_pdf_path, png_width, png_height)
 
-            if not render_success:
+            if not render_result.success:
                 print("Warning: Failed to render initial HTML to PDF for refinement")
-                # Fall back to returning the initial HTML without refinement
-                return initial_html
+                return None
 
             # Convert PDF back to PNG
             rendered_image_base64 = render_pdf_to_base64png(tmp_pdf_path, 1, max(png_width, png_height))
 
             if not rendered_image_base64:
                 print("Warning: Failed to convert rendered PDF to PNG for refinement")
-                # Fall back to returning the initial HTML without refinement
-                return initial_html
+                return None
+
+            # We are going to add some stuff to the prompt conditioned on if tables need to be corrected or not
+            extra_table_fixing_instructions = ""
+
+            # Check the tables, if they are non-rectangular, we can apply one more correction pass on them
+            table_data = parse_html_tables(initial_html)
+
+            if any(not table.is_rectangular for table in table_data):
+                extra_table_fixing_instructions = (
+                    "Important: I've noticed that in the HTML table code, some of the columns/rows are not aligned right. "
+                    "Please work extra hard to make sure the table columns are correctly lined up as in the original document. "
+                    "You can add HTML comments as you output the table to help keep track of the current row and column if needed.\n"
+                )
 
             # Step 4: Refinement - Show both images to Claude and ask for corrections
-            async with client.messages.stream(
-                model="claude-sonnet-4-5-20250929",
+            refinement_response = await claude_stream(
+                client,
+                model=DEFAULT_MODEL_NAME,
                 max_tokens=40000,
                 temperature=1.0,
                 thinking={"type": "enabled", "budget_tokens": 12000},
@@ -534,7 +587,9 @@ async def generate_html_from_image(client, image_base64):
                                 "3. Spacing - are margins, padding, and spacing between elements correct?\n"
                                 "4. Occlusion - is any important content hidden or overlapping?\n"
                                 "5. Text formatting - are fonts, sizes, and styles appropriate?\n"
-                                "6. Tables - are the headers on tables are aligned with the correct corresponding columns?\n"
+                                "6. Math - are any Latex math equations delimited by either \\[ \\] or \\( \\) delimeters?\n"
+                                "7. Tables - are the headers on tables are aligned with the correct corresponding columns?\n"
+                                f"{extra_table_fixing_instructions}"
                                 f"The webpage will be viewed at {png_width}x{png_height} pixels.\n\n"
                                 "Provide a REVISED version of the HTML that corrects any issues you identified. "
                                 "Make sure all important elements are visible and the layout matches the original as closely as possible.\n"
@@ -543,12 +598,7 @@ async def generate_html_from_image(client, image_base64):
                         ],
                     }
                 ],
-            ) as refinement_stream:
-
-                async for event in refinement_stream:
-                    pass
-
-                refinement_response = await refinement_stream.get_final_message()
+            )
 
             # Check if refinement response was complete
             if hasattr(refinement_response, "stop_reason") and refinement_response.stop_reason != "end_turn":
@@ -568,14 +618,17 @@ async def generate_html_from_image(client, image_base64):
                 total_output_tokens += refinement_response.usage.output_tokens
 
             refined_html = extract_code_block(refined_html_text)
+            final_html = refined_html if refined_html else initial_html
+
+            # Check the tables, if they are non-rectangular, we can apply one more correction pass on them
+            table_data = parse_html_tables(final_html)
+
+            if any(not table.is_rectangular for table in table_data):
+                print("Table not rectangular, aborting")
+                return None
 
             # Return refined HTML if available, otherwise return initial HTML
-            if refined_html:
-                print("Successfully refined HTML using visual comparison")
-                return refined_html
-            else:
-                print("Warning: No HTML code block found in refinement response, using initial HTML")
-                return initial_html
+            return final_html
 
         finally:
             # Clean up temporary PDF file
@@ -585,6 +638,8 @@ async def generate_html_from_image(client, image_base64):
     except Exception as e:
         print(f"Error calling Claude API: {e}")
         return None
+    
+
 
 
 def extract_page_from_pdf(input_path, output_path, page_num):
@@ -628,10 +683,33 @@ def extract_page_from_pdf(input_path, output_path, page_num):
         return False
 
 
+async def _load_katex_on_page(page):
+    """Load KaTeX CSS/JS and run auto-render on an already-loaded Playwright page."""
+    katex_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "bench", "katex")
+    katex_css_path = os.path.join(katex_dir, "katex.min.css")
+    katex_js_path = os.path.join(katex_dir, "katex.min.js")
+    katex_autorender_js_path = os.path.join(katex_dir, "auto-render.min.js")
+
+    await page.add_style_tag(path=katex_css_path)
+    await page.add_script_tag(path=katex_js_path)
+    await page.add_script_tag(path=katex_autorender_js_path)
+
+    await page.evaluate("""
+        renderMathInElement(document.body, {
+            delimiters: [
+                {left: '\\\\(', right: '\\\\)', display: false},
+                {left: '\\\\[', right: '\\\\]', display: true}
+            ],
+            throwOnError: false
+        });
+    """)
+
+
 async def render_pdf_with_playwright(html_content, output_pdf_path, png_width, png_height):
     """
     Render HTML content using Playwright and save it as PDF.
-    Try different scale factors if needed to ensure the output is exactly one page.
+    First checks for text cutoff (overflow clipping), then tries different
+    scale factors if needed to ensure the output is exactly one page.
 
     Args:
         html_content: HTML content to render
@@ -640,97 +718,94 @@ async def render_pdf_with_playwright(html_content, output_pdf_path, png_width, p
         png_height: Height of the viewport
 
     Returns:
-        bool: True if rendering was successful with exactly one page, False otherwise
+        RenderResult with success, scale_used, cutoff info
     """
-    scale_factors = [1.0, 0.9, 0.8, 0.7, 0.6, 0.5]  # Try these scale factors in order
+    scale_factors = [1.0, 0.9, 0.8, 0.7, 0.6, 0.5]
 
     # Determine page format based on PNG dimensions
-    # Define thresholds with some tolerance (±5%)
     aspect_ratio = png_width / png_height
-
-    # Letter Portrait: 8.5" x 11" (aspect ratio ~0.77)
-    # Letter Landscape: 11" x 8.5" (aspect ratio ~1.29)
-    # A4 Portrait: 210mm x 297mm (aspect ratio ~0.71)
-    # A4 Landscape: 297mm x 210mm (aspect ratio ~1.41)
 
     pdf_options = {
         "path": output_pdf_path,
         "print_background": True,
     }
 
-    if 0.73 <= aspect_ratio <= 0.81:  # Letter Portrait (8.5/11 = 0.77)
+    if 0.73 <= aspect_ratio <= 0.81:  # Letter Portrait
         pdf_options["width"] = "8.5in"
         pdf_options["height"] = "11in"
-    elif 1.23 <= aspect_ratio <= 1.35:  # Letter Landscape (11/8.5 = 1.29)
+    elif 1.23 <= aspect_ratio <= 1.35:  # Letter Landscape
         pdf_options["width"] = "11in"
         pdf_options["height"] = "8.5in"
-    elif 0.67 <= aspect_ratio <= 0.73:  # A4 Portrait (210/297 = 0.71)
+    elif 0.67 <= aspect_ratio <= 0.73:  # A4 Portrait
         pdf_options["width"] = "210mm"
         pdf_options["height"] = "297mm"
-    elif 1.36 <= aspect_ratio <= 1.47:  # A4 Landscape (297/210 = 1.41)
+    elif 1.36 <= aspect_ratio <= 1.47:  # A4 Landscape
         pdf_options["width"] = "297mm"
         pdf_options["height"] = "210mm"
-    # else: Other - leave width and height unset
 
-    for scale in scale_factors:
+    async with async_playwright() as p:
+        browser = await p.chromium.launch()
+
         try:
-            async with async_playwright() as p:
-                browser = await p.chromium.launch()
-                page = await browser.new_page(viewport={"width": int(png_width * scale), "height": int(png_height * scale)})
+            # Phase 1: Cutoff detection at original viewport size
+            check_page = await browser.new_page(
+                viewport={"width": png_width, "height": png_height}
+            )
+            await check_page.set_content(html_content, wait_until="load")
+            await _load_katex_on_page(check_page)
 
-                # Set the HTML content
-                await page.set_content(html_content)
+            cutoff_elements = await _detect_cutoff_on_page(check_page, 0.9)
+            await check_page.close()
 
-                # Add in katex and setup auto rendering
-                katex_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "katex")
-                katex_css_path = os.path.join(katex_dir, "katex.min.css")
-                katex_js_path = os.path.join(katex_dir, "katex.min.js")
-                katex_autorender_js_path = os.path.join(katex_dir, "auto-render.min.js")
-
-                await page.add_style_tag(path=katex_css_path)
-                await page.add_script_tag(path=katex_js_path)
-                await page.add_script_tag(path=katex_autorender_js_path)
-
-                # Run the KaTeX auto-renderer immediately rather than waiting for DOMContentLoaded
-                await page.evaluate("""
-                    renderMathInElement(document.body, {
-                        // customised options
-                        // • auto-render specific keys, e.g.:
-                        delimiters: [
-                            {left: '\\\\(', right: '\\\\)', display: false},
-                            {left: '\\\\[', right: '\\\\]', display: true}
-                        ],
-                        // • rendering keys, e.g.:
-                        throwOnError: false
-                    });
-                """)
-
-                # Save as PDF with formatting options
-                # Add scale to the options
-                pdf_options["scale"] = scale
-                await page.pdf(**pdf_options)
-
+            if has_significant_cutoff(cutoff_elements):
                 await browser.close()
+                return RenderResult(
+                    success=False,
+                    cutoff_elements=cutoff_elements,
+                    has_cutoff=True,
+                )
 
-                # Check if the output PDF has exactly one page
+            # Phase 2: Scale loop — render PDF, check page count
+            for scale in scale_factors:
                 try:
-                    reader = pypdf.PdfReader(output_pdf_path)
-                    if len(reader.pages) == 1:
-                        print(f"Successfully rendered as a single page PDF with scale factor {scale}")
-                        return True
-                    else:
-                        print(f"PDF has {len(reader.pages)} pages with scale factor {scale}, trying a smaller scale...")
-                        # Continue to the next scale factor
-                except Exception as pdf_check_error:
-                    print(f"Error checking PDF page count: {pdf_check_error}")
-                    return False
+                    page = await browser.new_page(
+                        viewport={
+                            "width": int(png_width * scale),
+                            "height": int(png_height * scale),
+                        }
+                    )
+                    await page.set_content(html_content)
+                    await _load_katex_on_page(page)
+
+                    pdf_options["scale"] = scale
+                    await page.pdf(**pdf_options)
+                    await page.close()
+
+                    try:
+                        reader = pypdf.PdfReader(output_pdf_path)
+                        if len(reader.pages) == 1:
+                            print(f"Successfully rendered as a single page PDF with scale factor {scale}")
+                            await browser.close()
+                            return RenderResult(success=True, scale_used=scale)
+                        else:
+                            print(f"PDF has {len(reader.pages)} pages with scale factor {scale}, trying a smaller scale...")
+                    except Exception as pdf_check_error:
+                        print(f"Error checking PDF page count: {pdf_check_error}")
+                        await browser.close()
+                        return RenderResult(success=False)
+
+                except Exception as e:
+                    print(f"Error rendering PDF with Playwright at scale {scale}: {str(e)}")
 
         except Exception as e:
-            print(f"Error rendering PDF with Playwright at scale {scale}: {str(e)}")
-            # Try the next scale factor
+            print(f"Error during render_pdf_with_playwright: {str(e)}")
+            await browser.close()
+            return RenderResult(success=False)
+
+        await browser.close()
 
     print("Failed to render PDF as a single page with any scale factor")
-    return False
+    return RenderResult(success=False)
 
 
 def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, random_gen: random.Random, verbose_table_testing: bool = False) -> List[Dict]:
@@ -881,36 +956,21 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
 
     for table_idx, table_data in enumerate(table_data_list):
         # Get the table data as a numpy array
-        table_array = table_data.data
         table_tests = []
 
         # Skip tables that are too small
-        if table_array.shape[0] < 2 or table_array.shape[1] < 2:
+        if max(x[0] for x in table_data.cell_text.keys()) < 2:
+            continue
+        if max(x[1] for x in table_data.cell_text.keys()) < 2:
             continue
 
-        # Get a limited number of cells to create tests for
-        # Select random rows and columns, excluding header rows/columns
-        non_header_rows = [i for i in range(table_array.shape[0]) if i not in table_data.header_rows]
-        non_header_cols = [j for j in range(table_array.shape[1]) if j not in table_data.header_cols]
+        all_known_cells = list(table_data.cell_text.items())
+        random_gen.shuffle(all_known_cells)
 
-        # If we don't have enough non-header cells, use all cells
-        if len(non_header_rows) < 2 or len(non_header_cols) < 2:
-            cell_positions = [(i, j) for i in range(table_array.shape[0]) for j in range(table_array.shape[1])]
-        else:
-            cell_positions = [
-                (i, j)
-                for i in random_gen.sample(non_header_rows, min(3, len(non_header_rows)))
-                for j in random_gen.sample(non_header_cols, min(2, len(non_header_cols)))
-            ]
+        for rowcol, cell_content in all_known_cells:
+            cell_content = normalize_text(cell_content)
 
-        random_gen.shuffle(cell_positions)
-
-        # Create tests for each selected cell
-        for row_idx, col_idx in cell_positions:
-            cell_text = str(table_array[row_idx, col_idx]).strip()
-
-            # Skip cells with minimal text
-            if not cell_text or len(cell_text) < 3:
+            if len(cell_content) == 0:
                 continue
 
             # Create a TableTest with relevant relationships
@@ -919,57 +979,40 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
                 "page": 1,
                 "id": f"{pdf_id}_table{table_idx}_{uuid.uuid4().hex[:8]}",
                 "type": TestType.TABLE.value,
-                "cell": cell_text,
+                "cell": cell_content,
                 "max_diffs": 0,
                 "ignore_markdown_tables": True,
             }
 
-            # Check cell up
-            if row_idx > 0:
-                up_text = str(table_array[row_idx - 1, col_idx]).strip()
-                if up_text and "\n" not in up_text:
-                    test_data["up"] = up_text
+            if rowcol in table_data.up_relations and len(table_data.up_relations[rowcol]) > 0:
+                relation = random_gen.choice(list(table_data.up_relations[rowcol]))
+                if len(table_data.cell_text[relation].strip()) > 0 and "\n" not in table_data.cell_text[relation]:
+                    test_data["up"] = normalize_text(table_data.cell_text[relation])
 
-            # Check cell down
-            if row_idx < table_array.shape[0] - 1:
-                down_text = str(table_array[row_idx + 1, col_idx]).strip()
-                if down_text and "\n" not in down_text:
-                    test_data["down"] = down_text
+            if rowcol in table_data.down_relations and len(table_data.down_relations[rowcol]) > 0:
+                relation = random_gen.choice(list(table_data.down_relations[rowcol]))
+                if len(table_data.cell_text[relation].strip()) > 0 and "\n" not in table_data.cell_text[relation]:
+                    test_data["down"] = normalize_text(table_data.cell_text[relation])
 
-            # Check cell left
-            if col_idx > 0:
-                left_text = str(table_array[row_idx, col_idx - 1]).strip()
-                if left_text and "\n" not in left_text:
-                    test_data["left"] = left_text
+            if rowcol in table_data.left_relations and len(table_data.left_relations[rowcol]) > 0:
+                relation = random_gen.choice(list(table_data.left_relations[rowcol]))
+                if len(table_data.cell_text[relation].strip()) > 0 and "\n" not in table_data.cell_text[relation]:
+                    test_data["left"] = normalize_text(table_data.cell_text[relation])
 
-            # Check cell right
-            if col_idx < table_array.shape[1] - 1:
-                right_text = str(table_array[row_idx, col_idx + 1]).strip()
-                if right_text and "\n" not in right_text:
-                    test_data["right"] = right_text
+            if rowcol in table_data.right_relations and len(table_data.right_relations[rowcol]) > 0:
+                relation = random_gen.choice(list(table_data.right_relations[rowcol]))
+                if len(table_data.cell_text[relation].strip()) > 0 and "\n" not in table_data.cell_text[relation]:
+                    test_data["right"] = normalize_text(table_data.cell_text[relation])
 
-            # Check if current cell is a heading cell
-            is_header_cell = row_idx in table_data.header_rows or col_idx in table_data.header_cols
+            if len(table_data.left_heading_relations(*rowcol)) > 0:
+                relation = random_gen.choice(list(table_data.left_heading_relations(*rowcol)))
+                if len(table_data.cell_text[relation].strip()) > 0 and "\n" not in table_data.cell_text[relation]:
+                    test_data["left_heading"] = normalize_text(table_data.cell_text[relation])
 
-            # Check for top heading using header information (skip if current cell is a heading)
-            if not is_header_cell and col_idx in table_data.col_headers:
-                # Get the headers for this column
-                col_headers = table_data.col_headers[col_idx]
-                if col_headers:
-                    # Use the first header as the top heading
-                    _, top_heading = col_headers[0]
-                    if top_heading and "\n" not in top_heading:
-                        test_data["top_heading"] = top_heading
-
-            # Check for left heading using header information (skip if current cell is a heading)
-            if not is_header_cell and row_idx in table_data.row_headers:
-                # Get the headers for this row
-                row_headers = table_data.row_headers[row_idx]
-                if row_headers:
-                    # Use the first header as the left heading
-                    _, left_heading = row_headers[0]
-                    if left_heading and "\n" not in left_heading:
-                        test_data["left_heading"] = left_heading
+            if len(table_data.top_heading_relations(*rowcol)) > 0:
+                relation = random_gen.choice(list(table_data.top_heading_relations(*rowcol)))
+                if len(table_data.cell_text[relation].strip()) > 0 and "\n" not in table_data.cell_text[relation]:
+                    test_data["top_heading"] = normalize_text(table_data.cell_text[relation])
 
             # Only add the test if we have at least one relation
             if any(x in test_data for x in ["up", "down", "left", "right", "top_heading", "left_heading"]):
@@ -1005,8 +1048,8 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
                 if passed:
                     table_tests.append(test_data)
 
-            if len(table_tests) > 25:
-                break
+                if len(table_tests) > 25:
+                    break
 
         # Done with inner for loop iterating over cells
         # So add in the bulk of the test cases back in now
@@ -1014,14 +1057,26 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
 
     # Step 3: Generate TextPresenceTests and OrderingTests from markdown content
     # Convert HTML to markdown to get cleaner text for presence and ordering tests
-    markdown_content = html_to_markdown_with_frontmatter(html_content)
+    full_markdown_content = html_to_markdown_with_frontmatter(html_content)
+
+    # Extract language from HTML metadata for wordfreq
+    metadata = extract_html_metadata(html_content)
+    primary_language = metadata.get("primary_language", "en")
 
     # Remove any HTML tables from the markdown content
     # Tables can persist in markdown as raw HTML and we want to exclude them
-    markdown_content = re.sub(r"<table[^>]*>.*?</table>", "", markdown_content, flags=re.DOTALL | re.IGNORECASE)
+    stripped_markdown_content = re.sub(r"<table[^>]*>.*?</table>", "", full_markdown_content, flags=re.DOTALL | re.IGNORECASE)
+
+    # Remove math equations from this markdown content
+    # Remove $$...$$ blocks (display math)
+    stripped_markdown_content = re.sub(r"\$\$.*?\$\$", "", stripped_markdown_content, flags=re.DOTALL)
+    # Remove \[...\] blocks (display math)
+    stripped_markdown_content = re.sub(r"\\\[.*?\\\]", "", stripped_markdown_content, flags=re.DOTALL)
+    # Remove \(...\) blocks (inline math)
+    stripped_markdown_content = re.sub(r"\\\(.*?\\\)", "", stripped_markdown_content, flags=re.DOTALL)
 
     # Extract just the content part (after frontmatter)
-    markdown_lines = markdown_content.split("\n")
+    markdown_lines = stripped_markdown_content.split("\n")
     content_start_idx = 0
 
     # Skip frontmatter if present
@@ -1062,7 +1117,7 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
                         if sentence_str.startswith("- "):
                             sentence_str = sentence_str[2:]
 
-                        sentence_str = sentence_str.strip()
+                        sentence_str = normalize_text(sentence_str.strip())
 
                         if sentence_str:  # Only add if there's still content after cleaning
                             sentences.append(sentence_str)
@@ -1092,21 +1147,227 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
         if max_diffs > len(first_sentence) // 4 or max_diffs > len(second_sentence) // 4:
             continue
 
-        tests.append(
-            {
-                "pdf": pdf_filename,
-                "page": 1,
-                "id": f"{pdf_id}_order_{uuid.uuid4().hex[:8]}",
-                "type": TestType.ORDER.value,
-                "before": first_sentence,
-                "after": second_sentence,
-                "max_diffs": max_diffs,
-            }
-        )
-        num_order_tests += 1
+        test_data = {
+            "pdf": pdf_filename,
+            "page": 1,
+            "id": f"{pdf_id}_order_{uuid.uuid4().hex[:8]}",
+            "type": TestType.ORDER.value,
+            "before": first_sentence,
+            "after": second_sentence,
+            "max_diffs": max_diffs,
+        }
+
+        # Create test object to validate
+        try:
+            test_obj = TextOrderTest(**test_data)
+
+            # Run the test against the markdown content
+            passed, _ = test_obj.run(full_markdown_content)
+
+            if passed:
+                num_order_tests += 1
+                tests.append(test_data)
+        except Exception:
+            # Skip if test creation or validation fails
+            pass
 
         if num_order_tests > 5:
             break
+
+    # Go through the top 10 rarest words (any chars permitted), and also the top 5 rarest numbers (only numeric chars allowed)
+    # And add those as TestType.PRESENT.value, and also run the test to check that it passes before adding
+
+    word_counter = Counter()
+    number_counter = Counter()
+    word_rarities = {}  # Store Zipf frequencies for words
+
+    # Split on whitespace and check each token
+    # We use the clean set of sentences used in the order test creation, which have been line-by-line normalized
+    tokens = "\n".join(sentences).split()
+
+    # Pattern for numbers: optional minus, digits, optional decimal point and more digits
+    number_pattern = re.compile(r"^-?\d+(?:\.\d+)?$")
+
+    for token in tokens:
+        # Strip common punctuation from ends
+        token_cleaned = token.strip(".,;:!?\"'()")
+
+        if not token_cleaned:
+            continue
+
+        # Check if it's a number
+        if number_pattern.match(token_cleaned):
+            if len(token_cleaned) >= 2:  # Only count numbers with at least 2 characters
+                number_counter[token_cleaned] += 1
+        # Check if it's a word (has at least one alphabetic character)
+        elif any(c.isalpha() for c in token_cleaned):
+            token_lower = token_cleaned.lower()
+            if len(token_lower) >= 4:  # Only count words with at least 4 characters
+                word_counter[token_lower] += 1
+
+                # Calculate Zipf frequency if wordfreq is available
+                if token_lower not in word_rarities:
+                    # Get Zipf frequency (0-8 scale, higher = more common)
+                    # Use primary_language if it's a valid 2-letter code
+                    lang_code = primary_language if len(primary_language) == 2 else "en"
+                    try:
+                        zipf = zipf_frequency(token_lower, lang_code)
+                        word_rarities[token_lower] = zipf
+                    except:
+                        # If language not supported or error, use default
+                        word_rarities[token_lower] = 4.0  # Assume moderately common
+
+    # Collect rarest items first
+    rarest_items = []
+
+    if word_rarities:
+        # Filter for truly rare words (Zipf frequency ≤ 3)
+        rare_words_with_zipf = [(word, zipf) for word, zipf in word_rarities.items() if zipf <= 3.0]
+
+        # Sort by Zipf frequency (ascending = rarest first), then by count
+        rare_words_with_zipf.sort(key=lambda x: (x[1], word_counter[x[0]]))
+
+        # Take up to 10 rarest words
+        rarest_words = [word for word, _ in rare_words_with_zipf[:10]]
+    else:
+        # Fallback to old method if wordfreq not available
+        # Get the 10 least common words
+        sorted_words = sorted(word_counter.items(), key=lambda x: x[1])
+        rarest_words = [word for word, _ in sorted_words[:10]]
+
+    # Shuffle the rarest words
+    random_gen.shuffle(rarest_words)
+
+    # Add rarest words to the list with their type
+    for word in rarest_words:
+        rarest_items.append((word, "present_word"))
+
+    # Get the 5 least common numbers
+    sorted_numbers = sorted(number_counter.items(), key=lambda x: x[1])
+    rarest_numbers = [num for num, _ in sorted_numbers[:5]]
+
+    # Shuffle the rarest numbers
+    random_gen.shuffle(rarest_numbers)
+
+    # Add rarest numbers to the list with their type
+    for number in rarest_numbers:
+        rarest_items.append((number, "present_num"))
+
+    # Now create and validate presence tests for all rare items
+    for test_text, test_id_prefix in rarest_items:
+        # Normalize the test text
+        normalized_text = normalize_text(test_text)
+
+        if not normalized_text or len(normalized_text) < 2:
+            continue
+
+        # Create test data
+        test_data = {
+            "pdf": pdf_filename,
+            "page": 1,
+            "id": f"{pdf_id}_{test_id_prefix}_{uuid.uuid4().hex[:8]}",
+            "type": TestType.PRESENT.value,
+            "text": test_text,
+            "max_diffs": 0,
+        }
+
+        # Create test object to validate
+        try:
+            test_obj = TextPresenceTest(
+                pdf=test_data["pdf"],
+                page=test_data["page"],
+                id=test_data["id"],
+                type=test_data["type"],
+                text=test_data["text"],
+                max_diffs=test_data["max_diffs"],
+            )
+
+            # Run the test against the markdown content
+            passed, _ = test_obj.run(full_markdown_content)
+
+            if passed:
+                tests.append(test_data)
+        except Exception:
+            # Skip if test creation or validation fails
+            pass
+
+    # Step 3.5: Generate absence tests for 3 randomly selected common words that don't appear on the page
+    # Get the top 1000 most common words using wordfreq
+    # Note from Jake: For now, I am commenting this out, I can't just help shake this feeling that this would
+    # incentivize the model in slightly the wrong way somehow.
+    # lang_code = primary_language if len(primary_language) == 2 else 'en'
+    # try:
+    #     # Get top 1000 common words
+    #     common_words_list = top_n_list(lang_code, 1000)
+    # except:
+    #     # Fallback to English if language not supported
+    #     common_words_list = top_n_list('en', 1000)
+
+    # # Build a set of words that appear on the page (lowercase)
+    # page_words_set = set(word.lower() for word in word_counter.keys())
+
+    # # Find common words not on the page
+    # absent_common_words = []
+    # for word in common_words_list:
+    #     if word.lower() not in page_words_set and len(word) >= 2:  # Skip if word is on page
+    #         # Get the Zipf frequency to ensure it's truly common
+    #         try:
+    #             zipf = zipf_frequency(word, lang_code)
+    #             absent_common_words.append((word, zipf))
+    #         except:
+    #             # If error getting Zipf frequency, still include with a high assumed frequency
+    #             absent_common_words.append((word, 6.0))
+
+    # # Select 3 absent common words that are most similar to words on the page
+    # if len(absent_common_words) > 0 and len(page_words_set) > 0:
+    #     from rapidfuzz import fuzz
+
+    #     # Calculate similarity scores for each absent word
+    #     absent_words_with_similarity = []
+    #     page_words_list = list(page_words_set)  # Convert to list for iteration
+
+    #     for word, zipf_freq in absent_common_words:
+    #         # Calculate max similarity to any word on the page
+    #         max_similarity = 0
+    #         for page_word in page_words_list:
+    #             similarity = fuzz.ratio(word.lower(), page_word)
+    #             if similarity > max_similarity:
+    #                 max_similarity = similarity
+
+    #         absent_words_with_similarity.append((word, zipf_freq, max_similarity))
+
+    #     # Sort by similarity score (descending) to get words most similar to page content
+    #     absent_words_with_similarity.sort(key=lambda x: x[2], reverse=True)
+
+    #     # Select top 3 most similar words
+    #     num_to_select = min(3, len(absent_words_with_similarity))
+    #     selected_absent_words = absent_words_with_similarity[:num_to_select]
+
+    #     # Create absence tests for these selected common words
+    #     for word, zipf_freq, similarity_score in selected_absent_words:
+    #         test_data = {
+    #             "pdf": pdf_filename,
+    #             "page": 1,
+    #             "id": f"{pdf_id}_absent_common_{uuid.uuid4().hex[:8]}",
+    #             "type": TestType.ABSENT.value,
+    #             "text": word,
+    #             "max_diffs": 0,
+    #             "case_sensitive": False,
+    #         }
+
+    #         # Double-check the word really doesn't appear in the markdown text
+    #         # For ABSENT tests, we want to ensure the word is NOT found
+    #         try:
+    #             validation_test = TextPresenceTest(**test_data)
+
+    #             # Run the validation test against the markdown content
+    #             passed, _ = validation_test.run(markdown_text)
+
+    #             if passed:
+    #                 tests.append(test_data)
+    #         except Exception:
+    #             # Skip if test creation or validation fails
+    #             pass
 
     # Step 4: Generate Math tests for LaTeX equations from the markdown
 
@@ -1119,7 +1380,7 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
 
     math_equations = []
     for pattern, flags in math_patterns:
-        matches = re.findall(pattern, markdown_content, flags)
+        matches = re.findall(pattern, full_markdown_content, flags)
         for match in matches:
             # Clean up the match - remove extra whitespace and newlines
             equation = match.strip()
@@ -1148,6 +1409,196 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
                 "ignore_dollar_delimited": True,
             }
         )
+
+    # Step 5: Generate FormatTests for headings, bold, and italic text
+    format_tests = []
+
+    # Define mapping from HTML tags to format types
+    format_tag_mapping = {("h1", "h2", "h3", "h4", "h5", "h6"): "heading", ("b", "strong"): "bold", ("i", "em"): "italic"}
+
+    # Parse the HTML to find formatted elements
+    format_soup = BeautifulSoup(html_content, "html.parser")
+
+    # Convert superscripts and subscripts before extracting text
+    convert_superscripts_subscripts(format_soup)
+
+    # Remove headers, footers, and tables from format soup to focus on main content
+    for element in format_soup.find_all(["header", "footer", "table"]):
+        element.decompose()
+
+    # Track what we've already tested to avoid duplicates
+    tested_texts = set()
+
+    # Process each format type
+    for tags, format_type in format_tag_mapping.items():
+        # Find all elements with these tags
+        elements = format_soup.find_all(list(tags))
+
+        for element in elements:
+            if len(format_tests) >= 5:  # Limit to 5 total format tests
+                break
+
+            element_text = element.get_text().strip()
+            element_text = normalize_text(element_text)
+
+            if element_text and len(element_text) >= 3 and element_text not in tested_texts:
+                # Create a format test
+                test_data = {
+                    "pdf": pdf_filename,
+                    "page": 1,
+                    "id": f"{pdf_id}_format_{format_type}_{uuid.uuid4().hex[:8]}",
+                    "type": TestType.FORMAT.value,
+                    "text": element_text,
+                    "format": format_type,
+                    "max_diffs": round(len(element_text) * 0.05),
+                }
+
+                # Validate the test against markdown_content
+                try:
+                    test_obj = FormatTest(
+                        pdf=test_data["pdf"],
+                        page=test_data["page"],
+                        id=test_data["id"],
+                        type=test_data["type"],
+                        text=test_data["text"],
+                        format=test_data["format"],
+                        max_diffs=test_data["max_diffs"],
+                    )
+
+                    # Test against the markdown_content
+                    passed, _ = test_obj.run(full_markdown_content)
+
+                    if passed:
+                        format_tests.append(test_data)
+                        tested_texts.add(element_text)
+                except Exception:
+                    pass
+
+    # Add format tests to the main tests list
+    tests.extend(format_tests)
+
+    # Step 6: Generate FootnoteTests for footnotes on the page
+    footnote_tests = []
+
+    # Parse the HTML to find footnotes (without converting superscripts)
+    footnote_soup = BeautifulSoup(html_content, "html.parser")
+    cleanup_headers_footers_soup(footnote_soup)
+
+    # Look for superscript elements that might be footnote markers
+    sup_elements = footnote_soup.find_all("sup")
+
+    max_footnote_tests = 5
+    marker_sup_map = {}
+
+    for sup in sup_elements:
+        marker_text = sup.get_text().strip()
+
+        # Filter out markers that are unlikely to be footnote references
+        if not marker_text or not (marker_text.isdigit() or (len(marker_text) == 1 and marker_text.isalpha()) or marker_text in ["*", "†", "‡", "§", "¶"]):
+            continue
+
+        if marker_text not in marker_sup_map:
+            if len(marker_sup_map) >= max_footnote_tests:
+                continue
+            marker_sup_map[marker_text] = []
+
+        marker_sup_map[marker_text].append(sup)
+
+    for marker_text, marker_superscripts in marker_sup_map.items():
+        test_data = {
+            "pdf": pdf_filename,
+            "page": 1,
+            "id": f"{pdf_id}_footnote_{uuid.uuid4().hex[:8]}",
+            "type": TestType.FOOTNOTE.value,
+            "marker": marker_text,
+            "max_diffs": 0,
+        }
+
+        # Extract text context for each occurrence
+        occurrences = []
+        for sup in marker_superscripts:
+            parent = sup.parent
+            if not parent:
+                continue
+
+            # Get text before and after the sup element by reconstructing parent content
+            before_text = None
+            after_text = None
+
+            # Get all content before this sup element
+            text_before_sup = []
+            for sibling in parent.children:
+                if sibling == sup:
+                    break
+                if isinstance(sibling, str):
+                    text_before_sup.append(sibling)
+                else:
+                    text_before_sup.append(sibling.get_text())
+
+            # Get all content after this sup element
+            found_sup = False
+            text_after_sup = []
+            for sibling in parent.children:
+                if found_sup:
+                    if isinstance(sibling, str):
+                        text_after_sup.append(sibling)
+                    else:
+                        text_after_sup.append(sibling.get_text())
+                elif sibling == sup:
+                    found_sup = True
+
+            # Process text before marker
+            preceding_text = "".join(text_before_sup).strip()
+            if len(preceding_text) >= 10:
+                words = preceding_text.split()
+                if len(words) >= 2:
+                    last_words = " ".join(words[-3:]) if len(words) >= 3 else " ".join(words)
+                else:
+                    last_words = preceding_text
+                candidate = normalize_text(last_words)
+                if candidate and len(candidate) >= 5:
+                    before_text = candidate
+
+            # Process text after marker
+            following_text = "".join(text_after_sup).strip()
+            if len(following_text) >= 10:
+                words = following_text.split()
+                if len(words) >= 2:
+                    first_words = " ".join(words[:3]) if len(words) >= 3 else " ".join(words)
+                else:
+                    first_words = following_text[:50]
+                candidate = normalize_text(first_words)
+                if candidate and len(candidate) >= 5:
+                    after_text = candidate
+
+            occurrences.append({"before": before_text, "after": after_text})
+
+        # Apply logic based on number of occurrences
+        if len(occurrences) >= 2:
+            # If marker exists 2+ times: use before from first, after from second
+            if occurrences[0]["before"]:
+                test_data["appears_before_marker"] = occurrences[0]["before"]
+            if occurrences[1]["after"]:
+                test_data["appears_after_marker"] = occurrences[1]["after"]
+        elif len(occurrences) == 1:
+            # If marker exists 1 time: prefer left text, then right text
+            if occurrences[0]["before"]:
+                test_data["appears_before_marker"] = occurrences[0]["before"]
+            elif occurrences[0]["after"]:
+                test_data["appears_after_marker"] = occurrences[0]["after"]
+            # If neither before nor after text exists, we'll just have the marker
+
+        # Create test even if we only have the marker (no additional fields required)
+        try:
+            test_obj = FootnoteTest(**test_data)
+            passed, _ = test_obj.run(full_markdown_content)
+            if passed:
+                footnote_tests.append(test_data)
+        except Exception:
+            pass
+
+    # Add footnote tests to the main tests list
+    tests.extend(footnote_tests)
 
     # Final test filtering out stage
 
@@ -1178,6 +1629,12 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
 
         return any(c in superscript_chars or c in subscript_chars for c in value)
 
+    def contains_html_sup_sub_tags(value):
+        if not isinstance(value, str):
+            return False
+        # Check for HTML sup/sub tags
+        return "<sup>" in value or "</sup>" in value or "<sub>" in value or "</sub>" in value
+
     filtered_tests = []
     for test in tests:
         # Math tests should not be filtered for LaTeX content
@@ -1185,7 +1642,30 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
             filtered_tests.append(test)
             continue
 
-        # Check all text fields in the test for alphanumeric content, LaTeX, and Unicode super/subscripts
+        # Format tests have different validation requirements
+        if test.get("type") == TestType.FORMAT.value:
+            # Only check the "text" field for format tests
+            if "text" in test:
+                if contains_alphanumeric(test["text"]) and not contains_latex(test["text"]) and not contains_unicode_super_or_subscripts(test["text"]):
+                    filtered_tests.append(test)
+            continue
+
+        # Footnote tests have special requirements
+        if test.get("type") == TestType.FOOTNOTE.value:
+            # Markers can contain superscript characters, so don't filter them
+            # But appears_before_marker and appears_after_marker should not contain LaTeX
+            valid = True
+            if "appears_before_marker" in test and test["appears_before_marker"]:
+                if not contains_alphanumeric(test["appears_before_marker"]) or contains_latex(test["appears_before_marker"]):
+                    valid = False
+            if "appears_after_marker" in test and test["appears_after_marker"]:
+                if not contains_alphanumeric(test["appears_after_marker"]) or contains_latex(test["appears_after_marker"]):
+                    valid = False
+            if valid:
+                filtered_tests.append(test)
+            continue
+
+        # Check all text fields in the test for alphanumeric content, LaTeX, Unicode super/subscripts, and HTML tags
         all_valid = True
         for field in text_fields:
             if field in test:
@@ -1199,6 +1679,10 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
                     break
                 # Skip test if field contains Unicode super or subscripts
                 if contains_unicode_super_or_subscripts(test[field]):
+                    all_valid = False
+                    break
+                # Skip test if field contains HTML sup/sub tags
+                if contains_html_sup_sub_tags(test[field]):
                     all_valid = False
                     break
         if all_valid:
@@ -1223,16 +1707,131 @@ def generate_tests_from_html(html_content: str, pdf_id: str, page_num: int, rand
             test_signatures.add(test_signature)
             unique_tests.append(test)
 
+    # Add a single BaselineTest for this page
+    # First, check if the markdown content would fail due to disallowed characters
+    baseline_test_data = {
+        "pdf": pdf_filename,
+        "page": 1,
+        "id": f"{pdf_id}_baseline_{uuid.uuid4().hex[:8]}",
+        "type": "baseline",
+        "max_repeats": 30,
+        "check_disallowed_characters": True,
+    }
+
+    # Create a baseline test object to check if disallowed characters are present
+    try:
+        baseline_test_obj = BaselineTest(
+            pdf=baseline_test_data["pdf"],
+            page=baseline_test_data["page"],
+            id=baseline_test_data["id"],
+            type=baseline_test_data["type"],
+            max_repeats=baseline_test_data["max_repeats"],
+            check_disallowed_characters=True,
+        )
+
+        # Run the test with check_disallowed_characters=True
+        passed, explanation = baseline_test_obj.run(full_markdown_content)
+
+        # If it failed due to disallowed characters, set check_disallowed_characters=False
+        if not passed and "disallowed characters" in explanation:
+            baseline_test_data["check_disallowed_characters"] = False
+
+    except Exception:
+        # If there was an error creating/running the test, keep default settings
+        pass
+
+    # Add the baseline test to the list
+    unique_tests.append(baseline_test_data)
+
     return unique_tests
 
 
-async def process_pdf(pdf_info, args, client, pdf_filter=None):
+
+
+def check_outputs_exist(pdf_id: str, page_num: int, args, existing_test_pdfs: set) -> bool:
+    """
+    Check if all output files for a given PDF already exist.
+
+    Returns True if all outputs exist and processing can be skipped.
+    """
+    # Define expected output paths
+    html_dir = os.path.join(args.output_dir, "html", args.name)
+    pdfs_dir = os.path.join(args.output_dir, "pdfs", args.name)
+    training_dir = os.path.join(args.output_dir, "training", args.name)
+    bench_data_dir = os.path.join(args.output_dir, "bench_data")
+    claude_original_dir = os.path.join(bench_data_dir, "claude_original", args.name)
+
+    base_filename = f"{pdf_id}_page{page_num}"
+
+    # Check HTML file
+    html_path = os.path.join(html_dir, f"{base_filename}.html")
+    if not os.path.exists(html_path):
+        return False
+
+    # Check rendered PDF in pdfs dir
+    pdf_path = os.path.join(pdfs_dir, f"{base_filename}.pdf")
+    if not os.path.exists(pdf_path):
+        return False
+
+    # Check markdown in training dir
+    markdown_path = os.path.join(training_dir, f"{base_filename}.md")
+    if not os.path.exists(markdown_path):
+        return False
+
+    # Check symlink in training dir
+    pdf_link_path = os.path.join(training_dir, f"{base_filename}.pdf")
+    if not os.path.exists(pdf_link_path) and not os.path.islink(pdf_link_path):
+        return False
+
+    # Check claude_original symlink
+    claude_md_link_path = os.path.join(claude_original_dir, f"{base_filename}_pg1_repeat1.md")
+    if not os.path.exists(claude_md_link_path) and not os.path.islink(claude_md_link_path):
+        return False
+
+    # Check that bench data has at least one test for this PDF
+    expected_test_pdf = f"{args.name}/{base_filename}.pdf"
+    if expected_test_pdf not in existing_test_pdfs:
+        return False
+
+    return True
+
+
+def load_existing_test_pdfs(args) -> set:
+    """
+    Load existing test PDFs from the bench data JSONL file.
+
+    Returns a set of PDF paths that already have tests.
+    """
+    bench_data_dir = os.path.join(args.output_dir, "bench_data")
+    synthetic_json_path = os.path.join(bench_data_dir, f"{args.name}.jsonl")
+
+    existing_pdfs = set()
+    if os.path.exists(synthetic_json_path):
+        try:
+            with open(synthetic_json_path, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        try:
+                            test = json.loads(line)
+                            if "pdf" in test:
+                                existing_pdfs.add(test["pdf"])
+                        except json.JSONDecodeError:
+                            continue
+        except Exception as e:
+            print(f"Warning: Could not read existing bench data: {e}")
+
+    return existing_pdfs
+
+
+async def process_pdf(pdf_info, args, client, pdf_filter=None, existing_test_pdfs=None):
     """Process a single PDF, render a random page, and create an HTML template."""
     pdf_path, index = pdf_info
 
-    # Create a unique folder for each PDF in the temp directory
+    # Create a unique folder for each PDF in the temp directory; include PID and PDF path hash to avoid cross-run collisions
     pdf_id = f"pdf_{index:05d}"
-    temp_pdf_dir = os.path.join(args.temp_dir, pdf_id)
+    temp_dir_suffix = f"{os.getpid()}_{hashlib.sha1(pdf_path.encode('utf-8')).hexdigest()[:16]}"
+    temp_pdf_dir = os.path.join(args.temp_dir, f"{pdf_id}_{temp_dir_suffix}")
     os.makedirs(temp_pdf_dir, exist_ok=True)
 
     # Determine if we should log table test verification
@@ -1270,6 +1869,11 @@ async def process_pdf(pdf_info, args, client, pdf_filter=None):
         # Select a random page
         page_num = random_generator.randint(1, num_pages)
 
+        # Check if this PDF has already been processed (skip logic for resume)
+        if existing_test_pdfs is not None and check_outputs_exist(pdf_id, page_num, args, existing_test_pdfs):
+            print(f"Skipping {pdf_id} page {page_num} - already processed")
+            return {"skipped": True, "pdf_id": pdf_id, "page_number": page_num}
+
         # Render the page as a base64 PNG (run in thread pool since it's blocking I/O)
         loop = asyncio.get_event_loop()
         image_base64 = await loop.run_in_executor(None, render_pdf_to_base64png, local_pdf_path, page_num, 1024)
@@ -1279,6 +1883,23 @@ async def process_pdf(pdf_info, args, client, pdf_filter=None):
         if not html_content:
             print(f"Failed to generate HTML for {pdf_path}, page {page_num}")
             return None
+
+        if args.densify:
+            from olmocr.synth.augmentations import densify_html
+
+            html_content = await densify_html(client, html_content)
+
+            if not html_content:
+                print(f"Failed to densify HTML for {pdf_path}, page {page_num}")
+                return None
+
+        typo_records = []
+        pre_typo_html = None
+        if args.introduce_text_errors > 0:
+            from olmocr.synth.augmentations import introduce_text_errors
+
+            pre_typo_html = html_content
+            html_content, typo_records = introduce_text_errors(html_content, random_generator, num_errors=args.introduce_text_errors)
 
         # Add git commit meta tag if available
         git_commit = get_git_commit_hash()
@@ -1291,7 +1912,7 @@ async def process_pdf(pdf_info, args, client, pdf_filter=None):
             if head:
                 # Add meta tag with git commit
                 meta_tag = html_soup.new_tag("meta", attrs={"name": "olmocr_git_commit", "content": git_commit})
-                head.insert(0, meta_tag)
+                head.append(meta_tag)
 
                 # Update initial_html with the modified version
                 html_content = str(html_soup)
@@ -1309,6 +1930,57 @@ async def process_pdf(pdf_info, args, client, pdf_filter=None):
         os.makedirs(bench_data_dir, exist_ok=True)
         os.makedirs(bench_synthetic_dir, exist_ok=True)
         os.makedirs(claude_original_dir, exist_ok=True)
+
+        # Render PDF using Playwright
+        playwright_pdf_path = None
+        render_result = None
+        playwright_pdf_filename = f"{pdf_id}_page{page_num}.pdf"  # This will be used in the tests
+
+        playwright_pdf_path = os.path.join(pdfs_dir, playwright_pdf_filename)
+
+        try:
+            # Get PNG dimensions
+            png_width, png_height = get_png_dimensions_from_base64(image_base64)
+
+            # Run the async function directly since we're already in an async context
+            render_result = await render_pdf_with_playwright(html_content, playwright_pdf_path, png_width, png_height)
+
+            if render_result.success:
+                print(f"Successfully rendered with Playwright: {playwright_pdf_path}")
+
+                # Apply JPEG compression if requested
+                if args.jpegify:
+                    # Select a random quality level between 70 and 95
+                    jpeg_quality = random_generator.randint(70, 95)
+                    print(f"Applying JPEG compression with quality {jpeg_quality} to {playwright_pdf_path}")
+
+                    from olmocr.synth.augmentations import apply_jpeg_compression
+
+                    compression_success = apply_jpeg_compression(
+                        playwright_pdf_path,
+                        jpeg_quality,
+                        temp_pdf_dir
+                    )
+
+                    if compression_success:
+                        print(f"Successfully applied JPEG compression with quality {jpeg_quality}")
+                    else:
+                        print(f"Warning: Failed to apply JPEG compression, keeping original PDF")
+
+            else:
+                if render_result.has_cutoff:
+                    print(f"Skipping: text cutoff detected in {playwright_pdf_path}")
+                else:
+                    print(f"Failed to render as a single page PDF: {playwright_pdf_path}")
+                playwright_pdf_path = None
+        except Exception as e:
+            print(f"Failed to render with Playwright: {e}")
+            playwright_pdf_path = None
+            render_result = None
+
+        # If playwright rendering failed and was required, return None to skip the rest of the output here
+        if not render_result or not render_result.success:
+            return None
 
         # Save HTML to output directory
         html_path = os.path.join(html_dir, f"{pdf_id}_page{page_num}.html")
@@ -1345,35 +2017,6 @@ async def process_pdf(pdf_info, args, client, pdf_filter=None):
         if not extract_page_from_pdf(local_pdf_path, original_pdf_path, page_num):
             print(f"Failed to extract page {page_num} from {local_pdf_path}")
 
-        # Render PDF using Playwright if not skipped
-        playwright_pdf_path = None
-        render_success = False
-        playwright_pdf_filename = f"{pdf_id}_page{page_num}.pdf"  # This will be used in the tests
-
-        if not args.skip_playwright:
-            playwright_pdf_path = os.path.join(pdfs_dir, playwright_pdf_filename)
-
-            try:
-                # Get PNG dimensions
-                png_width, png_height = get_png_dimensions_from_base64(image_base64)
-
-                # Run the async function directly since we're already in an async context
-                render_success = await render_pdf_with_playwright(html_content, playwright_pdf_path, png_width, png_height)
-
-                if render_success:
-                    print(f"Successfully rendered with Playwright: {playwright_pdf_path}")
-                else:
-                    print(f"Failed to render as a single page PDF: {playwright_pdf_path}")
-                    playwright_pdf_path = None
-            except Exception as e:
-                print(f"Failed to render with Playwright: {e}")
-                playwright_pdf_path = None
-                render_success = False
-
-        # If playwright rendering failed and was required, return None to skip this test
-        if not args.skip_playwright and not render_success:
-            return None
-
         # Create soft link in bench_data/synthetic/ directory
         if playwright_pdf_path:
             synthetic_link_path = os.path.join(bench_synthetic_dir, playwright_pdf_filename)
@@ -1390,6 +2033,45 @@ async def process_pdf(pdf_info, args, client, pdf_filter=None):
         # Update the PDF path in all tests to use the playwright rendered PDF with the specified name prefix
         for test in tests:
             test["pdf"] = f"{args.name}/{playwright_pdf_filename}"
+
+        if args.introduce_text_errors > 0 and typo_records and pre_typo_html is not None:
+            original_markdown = html_to_markdown_with_frontmatter(pre_typo_html)
+            augmented_markdown = html_to_markdown_with_frontmatter(html_content)
+
+            # Remove any existing presence tests that match typo words
+            # (generate_tests_from_html may tag them as rare words)
+            typo_words = {r["typo_word"] for r in typo_records}
+            tests = [t for t in tests if not (t.get("type") == TestType.PRESENT.value and t.get("text") in typo_words)]
+
+            for record in typo_records:
+                typo_word = record["typo_word"]
+
+                test_id = f"{pdf_id}_typo_{uuid.uuid4().hex[:8]}"
+                test_data = {
+                    "pdf": f"{args.name}/{playwright_pdf_filename}",
+                    "page": 1,
+                    "id": test_id,
+                    "type": TestType.PRESENT.value,
+                    "text": typo_word,
+                    "max_diffs": 0,
+                }
+
+                test_obj = TextPresenceTest(
+                    pdf=test_data["pdf"],
+                    page=1,
+                    id=test_id,
+                    type=TestType.PRESENT.value,
+                    text=typo_word,
+                    max_diffs=0,
+                )
+
+                # Must FAIL against original (typo shouldn't exist before)
+                passed_original, _ = test_obj.run(original_markdown)
+                # Must PASS against augmented (typo should exist after)
+                passed_augmented, _ = test_obj.run(augmented_markdown)
+
+                if not passed_original and passed_augmented:
+                    tests.append(test_data)
 
         # Log table test stats if verbose
         if verbose_table_testing:
@@ -1426,10 +2108,13 @@ async def main():
     parser.add_argument("--output_dir", required=True, help="Directory to store extracted pages and tests")
     parser.add_argument("--temp_dir", default="/tmp/mine_tables", help="Directory for temporary files")
     parser.add_argument("--max_tests", type=int, default=100, help="Maximum number of tests to generate")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed for sampling selection of PDFs")
     parser.add_argument("--parallel", type=int, default=1, help="Number of parallel tasks to use")
     parser.add_argument("--api_key", help="Claude API key (or set ANTHROPIC_API_KEY environment variable)")
-    parser.add_argument("--skip_playwright", action="store_true", help="Skip Playwright PDF rendering")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose output including table test verification")
+    parser.add_argument("--densify", action="store_true", help="Set to ask claude to double the density of information on this page synthetically")
+    parser.add_argument("--jpegify", action="store_true", help="Apply JPEG compression to rendered PDFs with random quality (70-95)")
+    parser.add_argument("--introduce-text-errors", type=int, default=0, help="Introduce N intentional typos into HTML body text and generate corresponding presence tests")
     parser.add_argument("--filter", action="store_true", help="Apply PDF filtering to remove forms, spam, and non-English content")
     parser.add_argument("--name", default="synthetic", help="Name for the output JSONL file and subfolder (default: synthetic)")
     args = parser.parse_args()
@@ -1458,11 +2143,11 @@ async def main():
         print("PDF filtering enabled")
 
     # Reservoir sampling implementation
-    random_gen = random.Random(42)
+    random_gen = random.Random(args.seed)
     pdf_paths = []
 
     if os.path.isdir(args.input_list):
-        pdf_paths = list(glob.glob(os.path.join(args.input_list, "*.pdf"), recursive=True))
+        pdf_paths = list(sorted(glob.glob(os.path.join(args.input_list, "*.pdf"), recursive=True)))
     else:
         with open(args.input_list, "r") as f:
             for i, line in enumerate(tqdm(f)):
@@ -1488,18 +2173,28 @@ async def main():
     bench_data_dir = os.path.join(args.output_dir, "bench_data")
     os.makedirs(bench_data_dir, exist_ok=True)
     synthetic_json_path = os.path.join(bench_data_dir, f"{args.name}.jsonl")
-    open(synthetic_json_path, "w").close()  # Create empty file
+
+    # Load existing test PDFs for skip logic (resume support)
+    existing_test_pdfs = load_existing_test_pdfs(args)
+    if existing_test_pdfs:
+        print(f"Found {len(existing_test_pdfs)} existing PDFs with tests - will skip already processed items")
 
     # Initialize the metadata JSONL file
     metadata_dir = os.path.join(args.output_dir, "metadata")
     os.makedirs(metadata_dir, exist_ok=True)
     metadata_json_path = os.path.join(metadata_dir, f"{args.name}.jsonl")
-    open(metadata_json_path, "w").close()  # Create empty file
 
     # Counter for test statistics
     test_counter = 0
     test_types = defaultdict(int)  # Automatically handles any test type
     results = []
+
+    # Tracking for success/failure rates
+    total_attempted = 0
+    successful_templates = 0
+    failed_templates = 0
+    skipped_templates = 0
+    failure_reasons = defaultdict(int)
 
     # Initialize an asyncio lock for file access
     file_lock = asyncio.Lock()
@@ -1507,8 +2202,21 @@ async def main():
     # Process PDFs in parallel using asyncio
     async def process_with_progress(pdf_info):
         pdf_path = pdf_info[0]
+        nonlocal total_attempted, successful_templates, failed_templates
+
+        async with file_lock:
+            total_attempted += 1
+
         try:
-            result = await process_pdf(pdf_info, args, client, pdf_filter)
+            result = await process_pdf(pdf_info, args, client, pdf_filter, existing_test_pdfs)
+
+            # Handle skipped results (already processed)
+            if result and result.get("skipped"):
+                nonlocal skipped_templates
+                async with file_lock:
+                    skipped_templates += 1
+                return result
+
             if result and result.get("tests"):
                 # Append tests to synthetic.json as they're created (JSONL format)
                 async with file_lock:
@@ -1529,11 +2237,23 @@ async def main():
                         test_type = test.get("type", "unknown")
                         test_types[test_type] += 1
 
+                    successful_templates += 1
                     print(f"Added {len(result['tests'])} tests from {result['pdf_id']}, total: {test_counter}")
 
                 return result
+            else:
+                async with file_lock:
+                    failed_templates += 1
+                    if result is None:
+                        failure_reasons["processing_failed"] += 1
+                    elif not result.get("tests"):
+                        failure_reasons["no_tests_generated"] += 1
+                return None
         except Exception as e:
             print(f"Error processing {pdf_path}: {e}")
+            async with file_lock:
+                failed_templates += 1
+                failure_reasons["exception"] += 1
             return None
 
     # Create tasks for all PDFs
@@ -1567,8 +2287,7 @@ async def main():
 
     # Print summary of Playwright rendering results
     playwright_success = sum(1 for r in results if r and r.get("playwright_pdf_path"))
-    if not args.skip_playwright:
-        print(f"Playwright PDF rendering: {playwright_success}/{len(results)} successful")
+    print(f"Playwright PDF rendering: {playwright_success}/{len(results)} successful")
 
     print(f"Saved {test_counter} tests to {synthetic_json_path}")
 
@@ -1580,6 +2299,21 @@ async def main():
         print("Test type distribution:")
         for test_type, count in test_types.items():
             print(f"  - {test_type}: {count} tests")
+
+    # Print failure rate summary
+    print("\n===== Template Generation Summary =====")
+    print(f"Total PDFs attempted: {total_attempted}")
+    if total_attempted > 0:
+        print(f"Skipped (already processed): {skipped_templates} ({skipped_templates/total_attempted*100:.1f}%)")
+        print(f"Successfully generated: {successful_templates} ({successful_templates/total_attempted*100:.1f}%)")
+        print(f"Failed: {failed_templates} ({failed_templates/total_attempted*100:.1f}%)")
+    else:
+        print("No PDFs were processed")
+
+    if failed_templates > 0 and failure_reasons:
+        print("\nFailure breakdown:")
+        for reason, count in sorted(failure_reasons.items()):
+            print(f"  - {reason}: {count}")
 
     # Print final Claude API cost summary
     print("\nClaude Sonnet API Usage Summary:")

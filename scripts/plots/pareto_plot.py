@@ -132,21 +132,35 @@ def cost_per_million_by_page(gpu: Literal["a100", "h100", "l40s"], pages_sec: fl
 
 # All model data in one place for easy editing
 MODEL_DATA = [
-    # Perf data from historical API pricing
-    ModelData(name="GPT-4o", cost_per_million=12480, performance=69.9, category="Commercial VLM", label_offset=(-35, 10)),
-    ModelData(name="GPT-4o (Batch)", cost_per_million=6240, performance=69.9, category="Commercial VLM", label_offset=(-50, 10)),
+    # Perf data from olmocr paper
+    # ModelData(name="GPT-4o", cost_per_million=12480, performance=69.9, category="Commercial VLM", label_offset=(-35, 10)),
+    ModelData(name="GPT-4o", cost_per_million=7951, performance=69.9, category="Commercial VLM", label_offset=(0, 10)),
+    # Rescaled gpt-4o prices to gpt-4.1 api rates (3.093315*3+0.833599*12)/1288* 1000000/2
+    ModelData(name="GPT-4.1", cost_per_million=6112, performance=71.0, category="Commercial VLM", label_offset=(-50, 15)),
     ModelData(name="Mistral OCR", cost_per_million=1000, performance=72.0, category="Commercial API Tool", label_offset=(-20, 10)),
-    ModelData(name="Gemini Flash 2", cost_per_million=499, performance=63.8, category="Commercial VLM", label_offset=(-10, 10)),
-    ModelData(name="Gemini Flash 2 (Batch)", cost_per_million=249, performance=63.8, category="Commercial VLM", label_offset=(-50, -20)),
+    ModelData(name="Gemini Flash 2", cost_per_million=342, performance=66.3, category="Commercial VLM", label_offset=(10, -2)),
+    ModelData(name="Gemini Flash 2.5", cost_per_million=1042, performance=62.1, category="Commercial VLM", label_offset=(-160, 15)),
     # Perf data from paper https://arxiv.org/pdf/2509.22186
-    ModelData(
-        name="MinerU 2.5.4", cost_per_million=cost_per_million_by_page("a100", 2.12), performance=75.2, category="Open Source Tool", label_offset=(10, -5)
-    ),
+    ModelData(name="MinerU 2.5.4", cost_per_million=cost_per_million_by_page("a100", 2.12), performance=75.2, category="Open VLM", label_offset=(10, -10)),
     # Perf data is hard to measure, using previously calculated value, using more generous number from v.1.7.5
     ModelData(name="Marker v1.10.1", cost_per_million=1492, performance=76.1, category="Open Source Tool", label_offset=(-25, 10)),
     # Using cost per million pages from original olmocr paper
-    ModelData(name="Qwen 2 VL", cost_per_million=178, performance=31.5, category="Open VLM", label_offset=(-35, 10)),
-    ModelData(name="Qwen 2.5 VL", cost_per_million=178, performance=65.5, category="Open VLM", label_offset=(-35, 10)),
+    # ModelData(name="Qwen 2 VL", cost_per_million=???, performance=61.3, category="Open VLM", label_offset=(-35, 10)),
+    ModelData(
+        name="Qwen 2.5 VL",
+        cost_per_million=cost_per_million_by_page("h100", 10000 / (36 * 60 + 47)),
+        performance=64.5,
+        category="Open VLM",
+        label_offset=(-35, 10),
+    ),
+    # Using original olmocr cost, but scaling it by 3100/2100 which is the tokens/second rate difference that we see on H100 inference
+    ModelData(
+        name="Qwen 3 VL 8B",
+        cost_per_million=cost_per_million_by_page("h100", 10000 / (36 * 60 + 47)) * (3100 / 2100),
+        performance=61.4,
+        category="Open VLM",
+        label_offset=(-35, -25),
+    ),
     # Perf data from https://arxiv.org/pdf/2509.22186
     ModelData(name="Nanonets-OCR2-3B", cost_per_million=cost_per_million_by_page("a100", 0.55), performance=69.5, category="Open VLM", label_offset=(-85, 10)),
     # Pricing from this tweet: https://x.com/VikParuchuri/status/1980725223616876704
@@ -205,7 +219,7 @@ category_text_colors = {
 }
 
 # Create the plot
-plt.figure(figsize=(10, 6))
+plt.figure(figsize=(10, 8))
 
 # Plot each category
 categories = df[CATEGORY_COLUMN_NAME].unique()
@@ -223,7 +237,7 @@ for category in categories:
     )
 
 # Add labels for each point with increased font size
-FONTSIZE = 12  # Increased from 9
+FONTSIZE = 22  # Increased from 9
 for idx, row in df.iterrows():
     plt.annotate(
         row[MODEL_COLUMN_NAME],
@@ -237,7 +251,7 @@ for idx, row in df.iterrows():
     )
 
 # Set up axes
-plt.ylim(25, 85)  # Set y-axis limits from 25 to 85 to include Qwen2VL
+plt.ylim(55, 85)  # Set y-axis limits from 25 to 85 to include Qwen2VL
 plt.xlim(100, 15000)
 plt.xscale("log")  # Use log scale for cost
 plt.grid(True, which="both", ls=":", color=TEAL, alpha=0.2)
@@ -258,13 +272,13 @@ def dollar_formatter(x, pos):
 
 # Set specific x-axis ticks with increased font size
 plt.gca().xaxis.set_major_formatter(ticker.FuncFormatter(dollar_formatter))
-plt.gca().set_xticks([100, 200, 300, 500, 1000, 2000, 3000, 5000, 10000])
-plt.xticks(fontsize=12)  # Increased tick font size
-plt.yticks(fontsize=12)  # Increased tick font size
+plt.gca().set_xticks([100, 200, 500, 1000, 2000, 5000, 10000])
+plt.xticks(fontsize=16)  # Increased tick font size
+plt.yticks(fontsize=16)  # Increased tick font size
 
 # Add labels and title with increased font size
-plt.xlabel("Cost per Million Pages (USD, log scale)", fontsize=16, weight="medium")
-plt.ylabel("Overall Performance (Pass Rate %)", fontsize=16, weight="medium")
+plt.xlabel("Cost per Million Pages (USD, log scale)", fontsize=FONTSIZE, weight="medium")
+plt.ylabel("Overall Performance (Pass Rate %)", fontsize=FONTSIZE, weight="medium")
 # plt.title("OCR Engines: Performance vs. Cost", fontsize=12, weight="medium")
 
 # Remove spines
@@ -279,7 +293,7 @@ ordered_handles = [label_to_handle[label] for label in desired_order if label in
 ordered_labels = [label for label in desired_order if label in labels]
 
 plt.legend(
-    ordered_handles, ordered_labels, loc="lower right", fontsize=12, frameon=True, framealpha=0.9, edgecolor=TEAL, facecolor="white"  # Increased from 10
+    ordered_handles, ordered_labels, loc="lower right", fontsize=20, frameon=True, framealpha=0.9, edgecolor=TEAL, facecolor="white"  # Increased from 10
 )
 
 # Adjust layout

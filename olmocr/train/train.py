@@ -20,6 +20,7 @@ from transformers import (
     AutoProcessor,
     Qwen2_5_VLForConditionalGeneration,
     Qwen2VLForConditionalGeneration,
+    Qwen3VLForConditionalGeneration,
     get_scheduler,
 )
 
@@ -331,7 +332,10 @@ def main():
 
     # Load model
     logger.info(f"Loading model: {config.model.name}")
-    if "qwen2.5-vl" in config.model.name.lower() or "olmocr-2-7b-1025" in config.model.name.lower():
+    if "qwen3-vl" in config.model.name.lower():
+        model_class = Qwen3VLForConditionalGeneration
+        model = model_class.from_pretrained(config.model.name, **model_init_kwargs)
+    elif "qwen2.5-vl" in config.model.name.lower() or "olmocr-2-7b-1025" in config.model.name.lower():
         model_class = Qwen2_5_VLForConditionalGeneration
         model = model_class.from_pretrained(config.model.name, **model_init_kwargs)
     elif "qwen2-vl" in config.model.name.lower():

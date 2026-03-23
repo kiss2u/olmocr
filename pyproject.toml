@@ -102,6 +102,7 @@ bench = [
     "mistralai",
     "lxml",
     "flask",
+    "wordfreq",
 ]
 
 train = [

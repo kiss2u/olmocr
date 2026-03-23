@@ -47,19 +47,19 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# # Check for uncommitted changes
-# if [ -n "$BEAKER_IMAGE" ]; then
-#  echo "Skipping docker build"
-# else
-#     if ! git diff-index --quiet HEAD --; then
-#         echo "Error: There are uncommitted changes in the repository."
-#         echo "Please commit or stash your changes before running the benchmark."
-#         echo ""
-#         echo "Uncommitted changes:"
-#         git status --short
-#         exit 1
-#     fi
-# fi
+# Check for uncommitted changes
+if [ -n "$BEAKER_IMAGE" ]; then
+ echo "Skipping docker build"
+else
+    if ! git diff-index --quiet HEAD --; then
+        echo "Error: There are uncommitted changes in the repository."
+        echo "Please commit or stash your changes before running the benchmark."
+        echo ""
+        echo "Uncommitted changes:"
+        git status --short
+        exit 1
+    fi
+fi
 
 # Use conda environment Python if available, otherwise use system Python
 if [ -n "$CONDA_PREFIX" ]; then

@@ -3,6 +3,8 @@ import unittest
 from olmocr.bench.tests import (
     BaselineTest,
     BasePDFTest,
+    FootnoteTest,
+    FormatTest,
     MathTest,
     TableTest,
     TestChecked,
@@ -169,6 +171,14 @@ class TestTextPresenceTest(unittest.TestCase):
         result, explanation = test.run("This is some targetttt text in a document")
         self.assertTrue(result)
 
+    def test_absent_test_subsets(self):
+        """Test that ABSENT test returns False when text is found"""
+        test = TextPresenceTest(pdf="test.pdf", page=1, id="test_id", type=TestType.ABSENT.value, text="max", max_diffs=0)
+        result, explanation = test.run("There is a max set of diffs to make")
+        self.assertFalse(result)
+        result, explanation = test.run("This is some maximum text in a document")
+        self.assertFalse(result)
+
     def test_absent_text_not_found(self):
         """Test that ABSENT test returns True when text is not found"""
         test = TextPresenceTest(pdf="test.pdf", page=1, id="test_id", type=TestType.ABSENT.value, text="missing text")
@@ -295,6 +305,33 @@ class TestTextOrderTest(unittest.TestCase):
         result, _ = test.run("A B A B")  # A comes before B, but B also comes before second A
         self.assertTrue(result)
 
+    def test_real_case_unicode(self):
+        text = """# Marketing Strategies in the Canadian Beef Sector
+
+Julieta Frank,
+
+Derek Brewin,
+
+and
+
+Maria José Patiño*
+
+*Paper presented at the NCCC-134 Conference on Applied Commodity Price Analysis,  
+Forecasting, and Market Risk Management  
+St. Louis, Missouri, April 18-19, 2011*
+
+*Copyright 2011 by Julieta Frank, Derek Brewin, and Maria José Patiño. All rights reserved.  
+Readers may make verbatim copies of this document for non-commercial purposes by any  
+means, provided that this copyright notice appears on all such copies.*
+
+* Julieta Frank (Julieta_Frank@umanitoba.ca) is an Assistant Professor, Derek Brewin is an Associate Professor, and Maria José Patiño is a graduate student in the Department of Agribusiness and Agricultural Economics at the University of Manitoba. The funding support of the Manitoba Rural Adaptation Council and the Solomon Sinclair Farm Management Institute are gratefully acknowledged."""
+
+        test = TextOrderTest(
+            pdf="test.pdf", page=1, id="test_id", type=TestType.ORDER.value, before="Maria Jos\u00e9 Pati\u00f1o*", after="All rights reserved.", max_diffs=0
+        )
+        result, _ = test.run(text)
+        self.assertTrue(result)
+
 
 class TestTableTest(unittest.TestCase):
     """Test the TableTest class"""
@@ -349,20 +386,18 @@ class TestTableTest(unittest.TestCase):
         _test = TableTest(pdf="test.pdf", page=1, id="test_id", type=TestType.TABLE.value, cell="Cell A2")
         tables = parse_markdown_tables(self.markdown_table)
         self.assertEqual(len(tables), 1)
-        self.assertEqual(tables[0].data.shape, (3, 3))  # 3 rows, 3 columns
-        self.assertEqual(tables[0].data[0, 0], "Header 1")
-        self.assertEqual(tables[0].data[1, 1], "Cell A2")
-        self.assertEqual(tables[0].data[2, 2], "Cell B3")
+        self.assertEqual(tables[0].cell_text[0, 0], "Header 1")
+        self.assertEqual(tables[0].cell_text[1, 1], "Cell A2")
+        self.assertEqual(tables[0].cell_text[2, 2], "Cell B3")
 
     def test_parse_html_tables(self):
         """Test HTML table parsing"""
         _test = TableTest(pdf="test.pdf", page=1, id="test_id", type=TestType.TABLE.value, cell="Cell A2")
         tables = parse_html_tables(self.html_table)
         self.assertEqual(len(tables), 1)
-        self.assertEqual(tables[0].data.shape, (3, 3))  # 3 rows, 3 columns
-        self.assertEqual(tables[0].data[0, 0], "Header 1")
-        self.assertEqual(tables[0].data[1, 1], "Cell A2")
-        self.assertEqual(tables[0].data[2, 2], "Cell B3")
+        self.assertEqual(tables[0].cell_text[0, 0], "Header 1")
+        self.assertEqual(tables[0].cell_text[1, 1], "Cell A2")
+        self.assertEqual(tables[0].cell_text[2, 2], "Cell B3")
 
     def test_match_cell(self):
         """Test finding a cell in a table"""
@@ -924,14 +959,13 @@ consignatiediensten | 19816 | 1,0     | 6,0     | 2,8        | 1,2 |
         result, explanation = test.run(table)
         self.assertTrue(result, explanation)
 
-        # TODO Skipping these for now
-        # test = TableTest(pdf="test.pdf", page=1, id="test_id", type=TestType.TABLE.value, cell="Quarterly Sales ($000s)", down="Q2")
-        # result, explanation = test.run(table)
-        # self.assertTrue(result, explanation)
+        test = TableTest(pdf="test.pdf", page=1, id="test_id", type=TestType.TABLE.value, cell="Quarterly Sales ($000s)", down="Q2")
+        result, explanation = test.run(table)
+        self.assertTrue(result, explanation)
 
-        # test = TableTest(pdf="test.pdf", page=1, id="test_id", type=TestType.TABLE.value, cell="Q2", up="Quarterly Sales ($000s)")
-        # result, explanation = test.run(table)
-        # self.assertTrue(result, explanation)
+        test = TableTest(pdf="test.pdf", page=1, id="test_id", type=TestType.TABLE.value, cell="Q2", up="Quarterly Sales ($000s)")
+        result, explanation = test.run(table)
+        self.assertTrue(result, explanation)
 
     def test_multiple_markdown_tables(self):
         """Test that we can find and verify cells in multiple markdown tables in one document"""
@@ -1610,6 +1644,710 @@ class TestMathTest(unittest.TestCase):
                 self.assertTrue(result)
         except Exception as e:
             self.fail(f"Test failed with: {e}")
+
+
+class TestFormatTest(unittest.TestCase):
+    """Test the FormatTest class"""
+
+    def test_valid_initialization(self):
+        """Test that valid initialization works"""
+        test = FormatTest(pdf="test.pdf", page=1, id="test_id", type=TestType.FORMAT.value, text="Important Title", format="heading")
+        self.assertEqual(test.text, "Important Title")
+        self.assertEqual(test.format, "heading")
+        self.assertTrue(test.case_sensitive)
+
+    def test_invalid_test_type(self):
+        """Test that invalid test type raises ValidationError"""
+        with self.assertRaises(ValidationError):
+            FormatTest(pdf="test.pdf", page=1, id="test_id", type=TestType.PRESENT.value, text="test text", format="bold")
+
+    def test_empty_text(self):
+        """Test that empty text raises ValidationError"""
+        with self.assertRaises(ValidationError):
+            FormatTest(pdf="test.pdf", page=1, id="test_id", type=TestType.FORMAT.value, text="", format="heading")
+
+    def test_invalid_format_type(self):
+        """Test that invalid format type raises ValidationError"""
+        with self.assertRaises(ValidationError):
+            FormatTest(pdf="test.pdf", page=1, id="test_id", type=TestType.FORMAT.value, text="test text", format="underline")  # Not supported
+
+    def test_markdown_heading(self):
+        """Test detection of markdown headings"""
+        test = FormatTest(pdf="test.pdf", page=1, id="test_id", type=TestType.FORMAT.value, text="Chapter One", format="heading")
+
+        # Test various heading levels
+        content = "# Chapter One\nSome text here"
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        content = "## Chapter One\nSome text here"
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        content = "### Chapter One\nSome text here"
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+    def test_html_heading(self):
+        """Test detection of HTML headings"""
+        test = FormatTest(pdf="test.pdf", page=1, id="test_id", type=TestType.FORMAT.value, text="Chapter One", format="heading")
+
+        # Test various HTML heading tags
+        content = "<h1>Chapter One</h1>\nSome text here"
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        content = "<h3>Chapter One</h3>\nSome text here"
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+    def test_markdown_bold(self):
+        """Test detection of markdown bold text"""
+        test = FormatTest(pdf="test.pdf", page=1, id="test_id", type=TestType.FORMAT.value, text="important", format="bold")
+
+        # Test ** syntax
+        content = "This is **important** text"
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        # Test __ syntax
+        content = "This is __important__ text"
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        # Should not match if not bold
+        content = "This is important text"
+        result, explanation = test.run(content)
+        self.assertFalse(result)
+        self.assertIn("not found with bold formatting", explanation)
+
+    def test_html_bold(self):
+        """Test detection of HTML bold text"""
+        test = FormatTest(pdf="test.pdf", page=1, id="test_id", type=TestType.FORMAT.value, text="important", format="bold")
+
+        # Test <b> tag
+        content = "This is <b>important</b> text"
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        # Test <strong> tag
+        content = "This is <strong>important</strong> text"
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+    def test_markdown_italic(self):
+        """Test detection of markdown italic text"""
+        test = FormatTest(pdf="test.pdf", page=1, id="test_id", type=TestType.FORMAT.value, text="emphasis", format="italic")
+
+        # Test * syntax
+        content = "This needs *emphasis* here"
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        # Test _ syntax
+        content = "This needs _emphasis_ here"
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        # Should not match bold
+        content = "This needs **emphasis** here"
+        result, explanation = test.run(content)
+        self.assertFalse(result)
+        self.assertIn("not found with italic formatting", explanation)
+
+    def test_html_italic(self):
+        """Test detection of HTML italic text"""
+        test = FormatTest(pdf="test.pdf", page=1, id="test_id", type=TestType.FORMAT.value, text="emphasis", format="italic")
+
+        # Test <i> tag
+        content = "This needs <i>emphasis</i> here"
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        # Test <em> tag
+        content = "This needs <em>emphasis</em> here"
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+    def test_partial_match(self):
+        """Test that partial matches work"""
+        test = FormatTest(pdf="test.pdf", page=1, id="test_id", type=TestType.FORMAT.value, text="Chapter", format="heading")
+
+        content = "# Chapter One: Introduction\nSome text here"
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+    def test_case_insensitive(self):
+        """Test case insensitive matching"""
+        test = FormatTest(pdf="test.pdf", page=1, id="test_id", type=TestType.FORMAT.value, text="IMPORTANT", format="bold", case_sensitive=False)
+
+        content = "This is **important** text"
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+    def test_fuzzy_matching(self):
+        """Test fuzzy matching with max_diffs"""
+        test = FormatTest(pdf="test.pdf", page=1, id="test_id", type=TestType.FORMAT.value, text="Chapter One", format="heading", max_diffs=2)
+
+        # Slightly misspelled heading
+        content = "# Chaptre Oen\nSome text here"
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+    def test_multiple_formatted_sections(self):
+        """Test when multiple sections have the same format"""
+        test = FormatTest(pdf="test.pdf", page=1, id="test_id", type=TestType.FORMAT.value, text="Section Two", format="heading")
+
+        content = """
+# Section One
+Some text
+
+## Section Two
+More text
+
+### Section Three
+Even more text
+"""
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+    def test_nested_formatting(self):
+        """Test nested formatting scenarios"""
+        test = FormatTest(pdf="test.pdf", page=1, id="test_id", type=TestType.FORMAT.value, text="bold text inside", format="bold")
+
+        # Bold text inside a heading
+        content = "# This has **bold text inside** the heading"
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+    def test_mixed_markdown_html(self):
+        """Test content with both markdown and HTML formatting"""
+        test = FormatTest(pdf="test.pdf", page=1, id="test_id", type=TestType.FORMAT.value, text="Important", format="bold")
+
+        content = """
+Some **Important** markdown bold text.
+And some <b>Important</b> HTML bold text.
+"""
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+    def test_italic_not_matching_bold(self):
+        """Test that italic patterns don't incorrectly match bold"""
+        test = FormatTest(pdf="test.pdf", page=1, id="test_id", type=TestType.FORMAT.value, text="text", format="italic")
+
+        # Should not match double asterisk bold
+        content = "This is **text** here"
+        result, _ = test.run(content)
+        self.assertFalse(result)
+
+        # Should match single asterisk italic
+        content = "This is *text* here"
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+    def test_normalization_in_formatted_text(self):
+        """Test that text normalization works within formatted sections"""
+        test = FormatTest(
+            pdf="test.pdf",
+            page=1,
+            id="test_id",
+            type=TestType.FORMAT.value,
+            text="\"fancy\" 'quotes'",  # This is what it looks like after normalization
+            format="bold",
+        )
+
+        # Content has fancy quotes that should be normalized
+        content = "This is **\u201cfancy\u201d \u2018quotes\u2019** here"
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+
+class TestFootnoteTest(unittest.TestCase):
+    """Test the FootnoteTest class"""
+
+    def test_valid_initialization(self):
+        """Test that valid initialization works"""
+        test = FootnoteTest(pdf="test.pdf", page=1, id="test_id", type=TestType.FOOTNOTE.value, marker="1")
+        self.assertEqual(test.marker, "1")
+        self.assertIsNone(test.appears_before_marker)
+        self.assertIsNone(test.appears_after_marker)
+
+    def test_invalid_test_type(self):
+        """Test that invalid test type raises ValidationError"""
+        with self.assertRaises(ValidationError):
+            FootnoteTest(pdf="test.pdf", page=1, id="test_id", type=TestType.PRESENT.value, marker="1")
+
+    def test_marker_required(self):
+        """Test that marker field is required"""
+        with self.assertRaises(TypeError):
+            FootnoteTest(pdf="test.pdf", page=1, id="test_id", type=TestType.FOOTNOTE.value)
+
+    def test_marker_only(self):
+        """Test footnote with only marker specified"""
+        test = FootnoteTest(pdf="test.pdf", page=1, id="test_id", type=TestType.FOOTNOTE.value, marker="2")
+
+        # Test with markdown footnote reference
+        content = "This is some text[^2] with a footnote.\n\n[^2]: This is the footnote text."
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        # Test with HTML superscript
+        content = "This is some text<sup>2</sup> with a footnote."
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        # Test with Unicode superscript
+        content = "This is some text² with a footnote."
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        # Test when marker not found
+        content = "This text has no footnote markers."
+        result, explanation = test.run(content)
+        self.assertFalse(result)
+        self.assertIn("not found", explanation)
+
+    def test_appears_before_marker(self):
+        """Test footnote with appears_before_marker specified"""
+        test = FootnoteTest(pdf="test.pdf", page=1, id="test_id", type=TestType.FOOTNOTE.value, marker="1", appears_before_marker="important fact")
+
+        # Test when text appears before marker
+        content = "This is an important fact[^1] in the document."
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        content = "This is an important fact [^1] in the document."
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        content = "This is an important fact\t[^1] in the document."
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        # Test when text doesn't appear before marker
+        content = "This is something else[^1] important fact comes later."
+        result, explanation = test.run(content)
+        self.assertFalse(result)
+        self.assertIn("not found before", explanation)
+
+    def test_appears_after_marker(self):
+        """Test footnote with appears_after_marker specified"""
+        test = FootnoteTest(pdf="test.pdf", page=1, id="test_id", type=TestType.FOOTNOTE.value, marker="3", appears_after_marker="that needs citation")
+
+        # Test when text appears after marker
+        content = """This is a statement[^3] that needs citation from the study."""
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        content = """This is a statement[^3]that needs citation from the study."""
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        content = """This is a statement ³that needs citation from the study."""
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        # Test when text doesn't appear after marker
+        content = """This is a statement that needs citation before [^3] the marker."""
+        result, explanation = test.run(content)
+        self.assertFalse(result)
+        self.assertIn("not found after", explanation)
+
+    def test_both_before_and_after(self):
+        """Test footnote with both appears_before_marker and appears_after_marker specified"""
+        test = FootnoteTest(
+            pdf="test.pdf",
+            page=1,
+            id="test_id",
+            type=TestType.FOOTNOTE.value,
+            marker="1",
+            appears_before_marker="important fact",
+            appears_after_marker="documented here",
+        )
+
+        # Test when both conditions are met (can be at different occurrences)
+        content = "This is an important fact[^1] and also[^1] documented here."
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        # Test when both conditions are met at same occurrence
+        content = "This is an important fact[^1] documented here in the text."
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        # Test when one condition is not met
+        content = "This is something else[^1] documented here."
+        result, explanation = test.run(content)
+        self.assertFalse(result)
+
+        content = "Thiis is something else [^1] and also an important fact [^1] documented here."
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+    def test_fuzzy_matching_for_appears_before(self):
+        """Test fuzzy matching with max_diffs for appears_before_marker"""
+        test = FootnoteTest(
+            pdf="test.pdf", page=1, id="test_id", type=TestType.FOOTNOTE.value, marker="1", appears_before_marker="Example Reference", max_diffs=3
+        )
+
+        # Slightly misspelled text before marker
+        content = """The Exampl Referenc[^1] is cited here."""
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+    def test_fuzzy_matching_for_appears_after(self):
+        """Test fuzzy matching with max_diffs for appears_after_marker"""
+        test = FootnoteTest(
+            pdf="test.pdf", page=1, id="test_id", type=TestType.FOOTNOTE.value, marker="2", appears_after_marker="statistical analysis", max_diffs=2
+        )
+
+        # Slightly misspelled text after marker
+        content = "The reference[^2] statistcal analysys shows significant results."
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+    def test_multiple_footnotes(self):
+        """Test handling of multiple footnotes in document"""
+        test = FootnoteTest(pdf="test.pdf", page=1, id="test_id", type=TestType.FOOTNOTE.value, marker="2")
+
+        content = """First claim[^1] and second claim[^2].
+
+[^1]: First reference text.
+[^2]: Second reference with more details."""
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        test = FootnoteTest(pdf="test.pdf", page=1, id="test_id", type=TestType.FOOTNOTE.value, marker="1")
+
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+    def test_html_superscript_variations(self):
+        """Test various HTML superscript formats"""
+        test = FootnoteTest(pdf="test.pdf", page=1, id="test_id", type=TestType.FOOTNOTE.value, marker="4")
+
+        # Test with attributes in sup tag
+        content = 'Text with footnote<sup class="footnote">4</sup>.'
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        # Test case insensitive HTML
+        content = "Text with footnote<SUP>4</SUP>."
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+    def test_unicode_superscripts(self):
+        """Test all Unicode superscript digits"""
+        superscripts = {"0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴", "5": "⁵", "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹"}
+
+        for digit, superscript in superscripts.items():
+            test = FootnoteTest(pdf="test.pdf", page=1, id="test_id", type=TestType.FOOTNOTE.value, marker=digit)
+            content = f"Text with footnote{superscript}."
+            result, _ = test.run(content)
+            self.assertTrue(result, f"Failed for superscript {digit}")
+
+    def test_multi_digit_marker(self):
+        """Test multi-digit footnote markers"""
+        test = FootnoteTest(pdf="test.pdf", page=1, id="test_id", type=TestType.FOOTNOTE.value, marker="12")
+
+        # Test markdown reference
+        content = "Text with footnote[^12].\n\n[^12]: Reference text."
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        # Test Unicode superscript for multi-digit
+        content = "Text with footnote¹²."
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+    def test_appears_before_ignores_whitespace(self):
+        """Test that appears_before_marker ignores whitespace and non-alpha characters"""
+        test = FootnoteTest(pdf="test.pdf", page=1, id="test_id", type=TestType.FOOTNOTE.value, marker="1", appears_before_marker="claim")
+
+        # Should match even with punctuation and whitespace between
+        content = "This is a claim, ... !![^1] here."
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        # Should match with just spaces
+        content = "This is a claim    [^1] here."
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+    def test_empty_appears_before_validation(self):
+        """Test that empty appears_before_marker field raises ValidationError"""
+        with self.assertRaises(ValidationError):
+            FootnoteTest(pdf="test.pdf", page=1, id="test_id", type=TestType.FOOTNOTE.value, marker="1", appears_before_marker="   ")  # Whitespace only
+
+    def test_empty_appears_after_validation(self):
+        """Test that empty appears_after_marker field raises ValidationError"""
+        with self.assertRaises(ValidationError):
+            FootnoteTest(pdf="test.pdf", page=1, id="test_id", type=TestType.FOOTNOTE.value, marker="1", appears_after_marker="   ")  # Whitespace only
+
+    def test_normalized_text_in_footnotes(self):
+        """Test that text normalization works in appears_before/after_marker"""
+        test = FootnoteTest(
+            pdf="test.pdf", page=1, id="test_id", type=TestType.FOOTNOTE.value, marker="1", appears_before_marker='"fancy" quotes and-dashes'  # Normalized form
+        )
+
+        # Content with fancy characters that should be normalized
+        content = """"fancy" quotes and—dashes[^1] here."""
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+    def test_exact_marker_match(self):
+        """Test that marker matching is exact"""
+        test = FootnoteTest(pdf="test.pdf", page=1, id="test_id", type=TestType.FOOTNOTE.value, marker="1")
+
+        # Should match "1" but not "10", "11", etc.
+        content = "Text with footnote[^10]."
+        result, explanation = test.run(content)
+        self.assertFalse(result)
+        self.assertIn("not found", explanation)
+
+        # Should match exactly "1"
+        content = "Text with footnote[^1]."
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+    def test_special_symbol_markers(self):
+        """Test footnote markers with special symbols"""
+        # Test common special symbols used as footnote markers
+        special_symbols = ["*", "†", "‡", "§", "¶", "∥", "**", "††", "‡‡"]
+
+        for symbol in special_symbols:
+            test = FootnoteTest(pdf="test.pdf", page=1, id="test_id", type=TestType.FOOTNOTE.value, marker=symbol)
+
+            # Test with markdown footnote reference
+            content = f"Text with footnote[^{symbol}].\n\n[^{symbol}]: Footnote text."
+            result, _ = test.run(content)
+            self.assertTrue(result, f"Failed for symbol marker '{symbol}' in markdown")
+
+            # Test with HTML superscript
+            content = f"Text with footnote<sup>{symbol}</sup>."
+            result, _ = test.run(content)
+            self.assertTrue(result, f"Failed for symbol marker '{symbol}' in HTML")
+
+            # Test that the symbol as plain text doesn't match
+            # (it needs to be in proper footnote format)
+            content = f"Text with {symbol} in the middle."
+            result, _ = test.run(content)
+            self.assertFalse(result, f"Plain text '{symbol}' should not match as footnote marker")
+
+    def test_word_markers(self):
+        """Test footnote markers that are words"""
+        word_markers = ["apple", "note", "ref", "A", "B", "foo"]
+
+        for word in word_markers:
+            test = FootnoteTest(pdf="test.pdf", page=1, id="test_id", type=TestType.FOOTNOTE.value, marker=word)
+
+            # Test with markdown footnote reference
+            content = f"Text with footnote[^{word}].\n\n[^{word}]: Footnote text."
+            result, _ = test.run(content)
+            self.assertTrue(result, f"Failed for word marker '{word}' in markdown")
+
+            # Test with HTML superscript
+            content = f"Text with footnote<sup>{word}</sup>."
+            result, _ = test.run(content)
+            self.assertTrue(result, f"Failed for word marker '{word}' in HTML")
+
+            # Test that the word as plain text doesn't match
+            content = f"Text with {word} in the middle."
+            result, _ = test.run(content)
+            self.assertFalse(result, f"Plain text '{word}' should not match as footnote marker")
+
+    def test_marker_with_whitespace_validation(self):
+        """Test that markers with whitespace are rejected"""
+        with self.assertRaises(ValidationError) as cm:
+            FootnoteTest(pdf="test.pdf", page=1, id="test_id", type=TestType.FOOTNOTE.value, marker="has space")
+        self.assertIn("cannot contain whitespace", str(cm.exception))
+
+    def test_special_symbols_with_appears_before(self):
+        """Test special symbol markers combined with appears_before_marker"""
+        test = FootnoteTest(pdf="test.pdf", page=1, id="test_id", type=TestType.FOOTNOTE.value, marker="†", appears_before_marker="important")
+
+        # Use proper footnote format
+        content = """This is important[^†] here."""
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        # Test when text doesn't appear before
+        content = """This is something[^†] else important."""
+        result, explanation = test.run(content)
+        self.assertFalse(result)
+        self.assertIn("not found before", explanation)
+
+    def test_special_symbols_with_appears_after(self):
+        """Test special symbol markers with position checking"""
+        test = FootnoteTest(pdf="test.pdf", page=1, id="test_id", type=TestType.FOOTNOTE.value, marker="‡", appears_after_marker="critical finding")
+
+        # Test when text appears after the marker
+        content = "The reference<sup>‡</sup> critical finding was unexpected."
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        # Test when text doesn't appear after the marker
+        content = "The critical finding was before <sup>‡</sup> the marker."
+        result, explanation = test.run(content)
+        self.assertFalse(result)
+        self.assertIn("not found after", explanation)
+
+    def test_escaped_special_characters_in_regex(self):
+        """Test that special regex characters in markers are properly escaped"""
+        # These characters have special meaning in regex and need escaping
+        regex_special_markers = ["*", "**", ".", "^", "$", "+", "?", "|", "\\", "(", ")", "[", "]", "{", "}"]
+
+        for marker in regex_special_markers:
+            try:
+                test = FootnoteTest(pdf="test.pdf", page=1, id="test_id", type=TestType.FOOTNOTE.value, marker=marker)
+
+                # Test with markdown format
+                content = f"Text[^{marker}].\n\n[^{marker}]: Note."
+                result, _ = test.run(content)
+                # We expect this to work for valid markers like "*" and "**"
+                # But some like "\" might not be valid in markdown
+
+                # Test with HTML format which should work for all
+                content = f"Text<sup>{marker}</sup>."
+                result, _ = test.run(content)
+
+            except Exception as e:
+                # Some markers might not be valid, that's okay
+                pass
+
+    def test_mixed_formats_same_document(self):
+        """Test document with mixed footnote formats"""
+        test = FootnoteTest(pdf="test.pdf", page=1, id="test_id", type=TestType.FOOTNOTE.value, marker="†")
+
+        # Document with both markdown and HTML footnotes
+        content = """
+Some text[^†] with markdown format.
+Other text<sup>†</sup> with HTML format.
+
+[^†]: This is the footnote definition.
+"""
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+    def test_double_dagger_and_similar(self):
+        """Test markers that are repeated symbols"""
+        repeated_markers = ["**", "††", "‡‡", "§§", "***"]
+
+        for marker in repeated_markers:
+            test = FootnoteTest(pdf="test.pdf", page=1, id="test_id", type=TestType.FOOTNOTE.value, marker=marker)
+
+            # Test markdown format
+            content = f"Text[^{marker}].\n\n[^{marker}]: Note text."
+            result, _ = test.run(content)
+            self.assertTrue(result, f"Failed for repeated marker '{marker}'")
+
+    def test_case_sensitive_word_markers(self):
+        """Test that word markers are case-sensitive"""
+        test = FootnoteTest(pdf="test.pdf", page=1, id="test_id", type=TestType.FOOTNOTE.value, marker="Note")
+
+        # Should match exact case
+        content = "Text[^Note].\n\n[^Note]: Reference."
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        # Should not match different case
+        content = "Text[^note].\n\n[^note]: Reference."
+        result, _ = test.run(content)
+        self.assertFalse(result)
+
+    def test_html_footnote_definitions(self):
+        """Test HTML-style footnote definitions"""
+        test = FootnoteTest(pdf="test.pdf", page=1, id="test_id", type=TestType.FOOTNOTE.value, marker="1")
+
+        # HTML style: <sup>1</sup> marker
+        content = """
+Some text with a reference<sup>1</sup> in the middle.
+
+At the bottom:
+<sup>1</sup>This is the footnote text that appears right after the marker.
+"""
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+    def test_html_footnote_with_special_symbols(self):
+        """Test HTML-style footnotes with special symbol markers"""
+        test = FootnoteTest(pdf="test.pdf", page=1, id="test_id", type=TestType.FOOTNOTE.value, marker="†")
+
+        # HTML style with special symbol
+        content = """
+Important finding<sup>†</sup> in the research.
+
+<sup>†</sup>See appendix for details and supplementary materials.
+"""
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+    def test_mixed_footnote_styles(self):
+        """Test document with both markdown and HTML footnote definitions"""
+        # Test for first footnote (markdown style)
+        test1 = FootnoteTest(pdf="test.pdf", page=1, id="test_id", type=TestType.FOOTNOTE.value, marker="1")
+
+        content = """
+First point[^1] and second point<sup>2</sup>.
+
+[^1]: First reference in markdown style.
+
+<sup>2</sup>Second reference in HTML style.
+"""
+        result, _ = test1.run(content)
+        self.assertTrue(result)
+
+        # Test for second footnote (HTML style)
+        test2 = FootnoteTest(pdf="test.pdf", page=1, id="test_id", type=TestType.FOOTNOTE.value, marker="2")
+        result, _ = test2.run(content)
+        self.assertTrue(result)
+
+    def test_html_footnote_multiline(self):
+        """Test HTML footnote that spans multiple lines"""
+        test = FootnoteTest(pdf="test.pdf", page=1, id="test_id", type=TestType.FOOTNOTE.value, marker="3")
+
+        content = """
+Reference here<sup>3</sup>.
+
+<sup>3</sup>This footnote text
+spans multiple lines
+with more information.
+"""
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+    def test_real_world_case(self):
+        content = """## Abstract
+
+Automated scientific discovery promises to accelerate progress across scientific domains. However, developing and evaluating an AI agent's capacity for end-to-end scientific reasoning is challenging as running real-world experiments is often prohibitively expensive or infeasible. In this work we introduce DISCOVERYWORLD, the first virtual environment for developing and benchmarking an agent's ability to perform complete cycles of novel scientific discovery. DISCOVERYWORLD contains a variety of different challenges, covering topics as diverse as radioisotope dating, rocket science, and proteomics, to encourage development of *general* discovery skills rather than task-specific solutions. DISCOVERYWORLD itself is an inexpensive, simulated, text-based environment (with optional 2D visual overlay). It includes 120 different challenge tasks, spanning eight topics each with three levels of difficulty and several parametric variations. Each task requires an agent to form hypotheses, design and run experiments, analyze results, and act on conclusions. DISCOVERYWORLD further provides three automatic metrics for evaluating performance, based on (a) task completion, (b) task-relevant actions taken, and (c) the discovered explanatory knowledge. We find that strong baseline agents, that perform well in prior published environments, struggle on most DISCOVERYWORLD tasks, suggesting that DISCOVERYWORLD captures some of the novel challenges of discovery, and thus that DISCOVERYWORLD may help accelerate near-term development and assessment of scientific discovery competency in agents. Code available at github.com/allenai/discoveryworld.<sup>1</sup>
+
+## 1 Introduction
+
+A long-standing dream of AI has been to build systems that can perform scientific discovery, potentially leading to new breakthroughs for the benefit of humanity [13]. Recently, with the rise of neural techniques, there have been several successful discovery systems developed for specialized problems such as protein folding [10, 15], mathematics [22], and material science [24]. However, while the results have been impressive, these systems (deliberately) bypass the full discovery process of ideation, hypothesis formation, experiment design, etc., and instead (expertly) perform systematic searches over a pre-defined hypothesis space, with pre-defined goals. This raises the question: how much more can be achieved if AI is applied to the broader scientific process? Some works have indeed developed early systems for this, for example, in chemistry [1], and genetics [12]. These systems can also generate hypotheses, design experiments, and execute them (via robotics) in real environments. However, operating in real environments is expensive and complex, creating a barrier
+
+<sup>1</sup>Released under Apache-2.0 license."""
+
+        test = FootnoteTest(pdf="test.pdf", page=1, id="test_id", type=TestType.FOOTNOTE.value, marker="1")
+
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        test = FootnoteTest(
+            pdf="test.pdf",
+            page=1,
+            id="test_id",
+            type=TestType.FOOTNOTE.value,
+            marker="1",
+            appears_before_marker="Code available at github.com/allenai/discoveryworld.",
+        )
+
+        result, _ = test.run(content)
+        self.assertTrue(result)
+
+        test = FootnoteTest(pdf="test.pdf", page=1, id="test_id", type=TestType.FOOTNOTE.value, marker="1", appears_after_marker="Released under Apache")
+
+        result, _ = test.run(content)
+        self.assertTrue(result)
 
 
 if __name__ == "__main__":

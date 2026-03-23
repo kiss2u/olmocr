@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 from typing import Literal
 
@@ -23,6 +24,14 @@ from olmocr.prompts.prompts import (
     openai_response_format_schema,
 )
 
+# Set up logger
+logger = logging.getLogger(__name__)
+
+# Global variables to track token usage and document count
+TOTAL_INPUT_TOKENS = 0
+TOTAL_OUTPUT_TOKENS = 0
+TOTAL_DOCUMENTS = 0
+
 
 def run_chatgpt(
     pdf_path: str,
@@ -30,6 +39,7 @@ def run_chatgpt(
     model: str = "gpt-4o-2024-08-06",
     temperature: float = 0.1,
     target_longest_image_dim: int = 2048,
+    max_completion_tokens: int = 10000,
     prompt_template: Literal["full", "full_no_document_anchoring", "basic", "finetune", "fullv2", "fullv2simple", "fullv3simple"] = "finetune",
     response_template: Literal["plain", "json"] = "json",
 ) -> str:
@@ -44,6 +54,7 @@ def run_chatgpt(
     Returns:
         str: The OCR result in markdown format.
     """
+    global TOTAL_INPUT_TOKENS, TOTAL_OUTPUT_TOKENS, TOTAL_DOCUMENTS
     # Convert the first page of the PDF to a base64-encoded PNG image.
     image_base64 = render_pdf_to_base64png(pdf_path, page_num=page_num, target_longest_image_dim=target_longest_image_dim)
     anchor_text = get_anchor_text(pdf_path, page_num, pdf_engine="pdfreport")
@@ -84,11 +95,19 @@ def run_chatgpt(
             }
         ],
         temperature=temperature,
-        max_completion_tokens=20000,
+        max_completion_tokens=max_completion_tokens,
         # reasoning_effort="high",
         response_format=openai_response_format_schema() if response_template == "json" else None,
         safety_identifier="olmocr-bench-runner",
     )
+
+    # Accumulate token counts from the response
+    if response.usage:
+        TOTAL_INPUT_TOKENS += response.usage.prompt_tokens
+        TOTAL_OUTPUT_TOKENS += response.usage.completion_tokens
+
+    # Increment document counter
+    TOTAL_DOCUMENTS += 1
 
     raw_response = response.choices[0].message.content
 
@@ -100,6 +119,10 @@ def run_chatgpt(
         data = json.loads(raw_response)
         data = PageResponse(**data)
 
+        # Log token counts before returning
+        logger.warning(f"Token Usage - Documents: {TOTAL_DOCUMENTS}, Input: {TOTAL_INPUT_TOKENS}, Output: {TOTAL_OUTPUT_TOKENS}")
         return data.natural_text
     else:
+        # Log token counts before returning
+        logger.warning(f"Token Usage - Documents: {TOTAL_DOCUMENTS}, Input: {TOTAL_INPUT_TOKENS}, Output: {TOTAL_OUTPUT_TOKENS}")
         return raw_response

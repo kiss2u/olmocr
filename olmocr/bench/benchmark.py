@@ -191,6 +191,9 @@ def main():
     parser.add_argument(
         "--output_failed", type=str, default=None, help="Output a JSONL file containing tests that failed across all candidates. Provide a filename."
     )
+    parser.add_argument(
+        "--max_reports", type=int, default=None, help="Limit the HTML report to at most N unique PDFs per .jsonl file."
+    )
     args = parser.parse_args()
 
     input_folder = args.dir if os.path.isdir(args.dir) else os.path.dirname(args.dir)
@@ -231,6 +234,11 @@ def main():
     if not all_tests:
         print("No valid tests found. Exiting.", file=sys.stderr)
         sys.exit(1)
+
+    # When a single .jsonl file is passed, only consider PDFs referenced by its tests
+    if os.path.isfile(args.dir):
+        referenced_pdfs = {t.pdf for t in all_tests}
+        pdf_basenames = [p for p in pdf_basenames if p in referenced_pdfs]
 
     for pdf in pdf_basenames:
         if not any(t.type == "baseline" for t in all_tests if t.pdf == pdf):
@@ -409,7 +417,7 @@ def main():
 
     # Generate HTML report if requested
     if args.test_report:
-        generate_html_report(test_results_by_candidate, pdf_folder, args.test_report)
+        generate_html_report(test_results_by_candidate, pdf_folder, args.test_report, max_reports=args.max_reports, test_to_jsonl=test_to_jsonl)
 
     # Output tests that failed across all candidates if requested
     if args.output_failed:

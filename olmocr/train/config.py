@@ -99,6 +99,14 @@ class ReformatLatexBoldItalicConfig(PipelineStepConfig):
 
 
 @dataclass
+class TableTransformationConfig(PipelineStepConfig):
+    """Configuration for TableTransformation step."""
+
+    name: str = "TableTransformation"
+    transformation: str = "annotate_dims"  # The transformation to apply
+
+
+@dataclass
 class TokenizerStepConfig(PipelineStepConfig):
     """Configuration for Tokenizer step."""
 
@@ -390,6 +398,7 @@ class Config:
             ReformatLatexBoldItalic,
             RotationAugmentation,
             StaticLengthDocumentAnchoring,
+            TableTransformation,
             Tokenizer,
         )
         from olmocr.train.front_matter import FrontMatterParser
@@ -484,6 +493,9 @@ class Config:
 
             elif step_name == "ReformatLatexBoldItalic":
                 steps.append(ReformatLatexBoldItalic())
+
+            elif step_name == "TableTransformation":
+                steps.append(TableTransformation(transformation=step_config.get("transformation", "annotate_dims")))
 
             else:
                 raise ValueError(f"Unknown pipeline step: {step_name}")

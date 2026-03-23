@@ -3,12 +3,10 @@ import os
 import re
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from enum import Enum
-from typing import Dict, List, Optional, Set, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
-import numpy as np
-from bs4 import BeautifulSoup
 from fuzzysearch import find_near_matches
 from rapidfuzz import fuzz
 from tqdm import tqdm
@@ -16,90 +14,23 @@ from tqdm import tqdm
 from olmocr.repeatdetect import RepeatDetector
 
 from .katex.render import compare_rendered_equations, render_equation
+from .table_parsing import parse_html_tables, parse_markdown_tables
 
 # Tell pytest these are not tests
 __test__ = False
 
 
-@dataclass
-class TableData:
-    """Class to hold table data and metadata about headers."""
-
-    data: np.ndarray  # The actual table data
-    header_rows: Set[int] = field(default_factory=set)  # Indices of rows that are headers
-    header_cols: Set[int] = field(default_factory=set)  # Indices of columns that are headers
-    col_headers: dict = field(default_factory=dict)  # Maps column index to header text, handling colspan
-    row_headers: dict = field(default_factory=dict)  # Maps row index to header text, handling rowspan
-
-    def __repr__(self) -> str:
-        """Returns a concise representation of the TableData object for debugging."""
-        return f"TableData(shape={self.data.shape}, header_rows={len(self.header_rows)}, header_cols={len(self.header_cols)})"
-
-    def __str__(self) -> str:
-        """Returns a pretty string representation of the table with header information."""
-        output = []
-
-        # Table dimensions
-        output.append(f"Table: {self.data.shape[0]} rows × {self.data.shape[1]} columns")
-
-        # Header info
-        output.append(f"Header rows: {sorted(self.header_rows)}")
-        output.append(f"Header columns: {sorted(self.header_cols)}")
-
-        # Table content with formatting
-        separator = "+" + "+".join(["-" * 17] * self.data.shape[1]) + "+"
-
-        # Add a header for row indices
-        output.append(separator)
-        headers = [""] + [f"Column {i}" for i in range(self.data.shape[1])]
-        output.append("| {:<5} | ".format("Row") + " | ".join(["{:<15}".format(h) for h in headers[1:]]) + " |")
-        output.append(separator)
-
-        # Format each row
-        for i in range(min(self.data.shape[0], 15)):  # Limit to 15 rows for readability
-            # Format cells, mark header cells
-            cells = []
-            for j in range(self.data.shape[1]):
-                cell = str(self.data[i, j])
-                if len(cell) > 15:
-                    cell = cell[:12] + "..."
-                # Mark header cells with *
-                if i in self.header_rows or j in self.header_cols:
-                    cell = f"*{cell}*"
-                cells.append(cell)
-
-            row_str = "| {:<5} | ".format(i) + " | ".join(["{:<15}".format(c) for c in cells]) + " |"
-            output.append(row_str)
-            output.append(separator)
-
-        # If table is too large, indicate truncation
-        if self.data.shape[0] > 15:
-            output.append(f"... {self.data.shape[0] - 15} more rows ...")
-
-        # Column header details if available
-        if self.col_headers:
-            output.append("\nColumn header mappings:")
-            for col, headers in sorted(self.col_headers.items()):
-                header_strs = [f"({row}, '{text}')" for row, text in headers]
-                output.append(f"  Column {col}: {', '.join(header_strs)}")
-
-        # Row header details if available
-        if self.row_headers:
-            output.append("\nRow header mappings:")
-            for row, headers in sorted(self.row_headers.items()):
-                header_strs = [f"({col}, '{text}')" for col, text in headers]
-                output.append(f"  Row {row}: {', '.join(header_strs)}")
-
-        return "\n".join(output)
-
-
 class TestType(str, Enum):
+    __test__ = False  # Tell pytest this is not a test class
+
     BASELINE = "baseline"
     PRESENT = "present"
     ABSENT = "absent"
     ORDER = "order"
     TABLE = "table"
     MATH = "math"
+    FORMAT = "format"
+    FOOTNOTE = "footnote"
 
 
 class TestChecked(str, Enum):
@@ -120,9 +51,6 @@ def normalize_text(md_content: str) -> str:
     # Normalize <br> and <br/> to newlines
     md_content = re.sub(r"<br/?>", " ", md_content)
 
-    # Normalize whitespace in the md_content
-    md_content = re.sub(r"\s+", " ", md_content)
-
     # Remove markdown bold formatting (** or __ for bold)
     md_content = re.sub(r"\*\*(.*?)\*\*", r"\1", md_content)
     md_content = re.sub(r"__(.*?)__", r"\1", md_content)
@@ -130,8 +58,14 @@ def normalize_text(md_content: str) -> str:
     md_content = re.sub(r"</?i>", "", md_content)  # Remove <i> tags if they exist
 
     # Remove markdown italics formatting (* or _ for italics)
-    md_content = re.sub(r"\*(.*?)\*", r"\1", md_content)
-    md_content = re.sub(r"_(.*?)_", r"\1", md_content)
+    # Logic: The dot (.) in regex matches any character EXCEPT a newline.
+    # This automatically prevents matching **start \n\n end**.
+    # We use group \1 to ensure we match matching pairs (**...** or __...__).
+    md_content = re.sub(r"(\*\*|__)(.*?)\1", r"\2", md_content)  # Bold
+    md_content = re.sub(r"(\*|_)(.*?)\1", r"\2", md_content)  # Italics
+
+    # Normalize whitespace in the md_content
+    md_content = re.sub(r"\s+", " ", md_content)
 
     # Convert down to a consistent unicode form, so é == e + accent, unicode forms
     md_content = unicodedata.normalize("NFC", md_content)
@@ -144,331 +78,6 @@ def normalize_text(md_content: str) -> str:
         md_content = md_content.replace(fancy_char, ascii_char)
 
     return md_content
-
-
-def parse_markdown_tables(md_content: str) -> List[TableData]:
-    """
-    Extract and parse all markdown tables from the provided content.
-    Uses a direct approach to find and parse tables, which is more robust for tables
-    at the end of files or with irregular formatting.
-
-    Args:
-        md_content: The markdown content containing tables
-
-    Returns:
-        A list of TableData objects, each containing the table data and header information
-    """
-    # Split the content into lines and process line by line
-    lines = md_content.strip().split("\n")
-
-    parsed_tables = []
-    current_table_lines = []
-    in_table = False
-
-    # Identify potential tables by looking for lines with pipe characters
-    for i, line in enumerate(lines):
-        # Check if this line has pipe characters (a table row indicator)
-        if "|" in line:
-            # If we weren't in a table before, start a new one
-            if not in_table:
-                in_table = True
-                current_table_lines = [line]
-            else:
-                # Continue adding to the current table
-                current_table_lines.append(line)
-        else:
-            # No pipes in this line, so if we were in a table, we've reached its end
-            if in_table:
-                # Process the completed table if it has at least 2 rows
-                if len(current_table_lines) >= 2:
-                    table_data = _process_table_lines(current_table_lines)
-                    if table_data and len(table_data) > 0:
-                        # Convert to numpy array for easier manipulation
-                        max_cols = max(len(row) for row in table_data)
-                        padded_data = [row + [""] * (max_cols - len(row)) for row in table_data]
-                        table_array = np.array(padded_data)
-
-                        # In markdown tables, the first row is typically a header row
-                        header_rows = {0} if len(table_array) > 0 else set()
-
-                        # Set up col_headers with first row headers for each column
-                        col_headers = {}
-                        if len(table_array) > 0:
-                            for col_idx in range(table_array.shape[1]):
-                                if col_idx < len(table_array[0]):
-                                    col_headers[col_idx] = [(0, table_array[0, col_idx])]
-
-                        # Set up row_headers with first column headers for each row
-                        row_headers = {}
-                        if table_array.shape[1] > 0:
-                            for row_idx in range(1, table_array.shape[0]):  # Skip header row
-                                row_headers[row_idx] = [(0, table_array[row_idx, 0])]  # First column as heading
-
-                        # Create TableData object
-                        parsed_tables.append(
-                            TableData(
-                                data=table_array,
-                                header_rows=header_rows,
-                                header_cols={0} if table_array.shape[1] > 0 else set(),  # First column as header
-                                col_headers=col_headers,
-                                row_headers=row_headers,
-                            )
-                        )
-                in_table = False
-
-    # Process the last table if we're still tracking one at the end of the file
-    if in_table and len(current_table_lines) >= 2:
-        table_data = _process_table_lines(current_table_lines)
-        if table_data and len(table_data) > 0:
-            # Convert to numpy array
-            max_cols = max(len(row) for row in table_data)
-            padded_data = [row + [""] * (max_cols - len(row)) for row in table_data]
-            table_array = np.array(padded_data)
-
-            # In markdown tables, the first row is typically a header row
-            header_rows = {0} if len(table_array) > 0 else set()
-
-            # Set up col_headers with first row headers for each column
-            col_headers = {}
-            if len(table_array) > 0:
-                for col_idx in range(table_array.shape[1]):
-                    if col_idx < len(table_array[0]):
-                        col_headers[col_idx] = [(0, table_array[0, col_idx])]
-
-            # Set up row_headers with first column headers for each row
-            row_headers = {}
-            if table_array.shape[1] > 0:
-                for row_idx in range(1, table_array.shape[0]):  # Skip header row
-                    row_headers[row_idx] = [(0, table_array[row_idx, 0])]  # First column as heading
-
-            # Create TableData object
-            parsed_tables.append(
-                TableData(
-                    data=table_array,
-                    header_rows=header_rows,
-                    header_cols={0} if table_array.shape[1] > 0 else set(),  # First column as header
-                    col_headers=col_headers,
-                    row_headers=row_headers,
-                )
-            )
-
-    return parsed_tables
-
-
-def _process_table_lines(table_lines: List[str]) -> List[List[str]]:
-    """
-    Process a list of lines that potentially form a markdown table.
-
-    Args:
-        table_lines: List of strings, each representing a line in a potential markdown table
-
-    Returns:
-        A list of rows, each a list of cell values
-    """
-    table_data = []
-    separator_row_index = None
-
-    # First, identify the separator row (the row with dashes)
-    for i, line in enumerate(table_lines):
-        # Check if this looks like a separator row (contains mostly dashes)
-        content_without_pipes = line.replace("|", "").strip()
-        if content_without_pipes and all(c in "- :" for c in content_without_pipes):
-            separator_row_index = i
-            break
-
-    # Process each line, filtering out the separator row
-    for i, line in enumerate(table_lines):
-        # Skip the separator row
-        if i == separator_row_index:
-            continue
-
-        # Skip lines that are entirely formatting
-        if line.strip() and all(c in "- :|" for c in line):
-            continue
-
-        # Process the cells in this row
-        cells = [cell.strip() for cell in line.split("|")]
-
-        # Remove empty cells at the beginning and end (caused by leading/trailing pipes)
-        if cells and cells[0] == "":
-            cells = cells[1:]
-        if cells and cells[-1] == "":
-            cells = cells[:-1]
-
-        if cells:  # Only add non-empty rows
-            table_data.append(cells)
-
-    return table_data
-
-
-def parse_html_tables(html_content: str) -> List[TableData]:
-    """
-    Extract and parse all HTML tables from the provided content.
-    Identifies header rows and columns, and maps them properly handling rowspan/colspan.
-
-    Args:
-        html_content: The HTML content containing tables
-
-    Returns:
-        A list of TableData objects, each containing the table data and header information
-    """
-    soup = BeautifulSoup(html_content, "html.parser")
-    tables = soup.find_all("table")
-
-    parsed_tables = []
-
-    for table in tables:
-        rows = table.find_all(["tr"])
-        table_data = []
-        header_rows = set()
-        header_cols = set()
-        col_headers = {}  # Maps column index to all header cells above it
-        row_headers = {}  # Maps row index to all header cells to its left
-
-        # Find rows inside thead tags - these are definitely header rows
-        thead = table.find("thead")
-        if thead:
-            thead_rows = thead.find_all("tr")
-            for tr in thead_rows:
-                header_rows.add(rows.index(tr))
-
-        # Initialize a grid to track filled cells due to rowspan/colspan
-        cell_grid = {}
-        col_span_info = {}  # Tracks which columns contain headers
-        row_span_info = {}  # Tracks which rows contain headers
-
-        # First pass: process each row to build the raw table data and identify headers
-        for row_idx, row in enumerate(rows):
-            cells = row.find_all(["th", "td"])
-            row_data = []
-            col_idx = 0
-
-            # If there are th elements in this row, it's likely a header row
-            if row.find("th"):
-                header_rows.add(row_idx)
-
-            for cell in cells:
-                # Skip positions already filled by rowspans from above
-                while (row_idx, col_idx) in cell_grid:
-                    row_data.append(cell_grid[(row_idx, col_idx)])
-                    col_idx += 1
-
-                # Replace <br> and <br/> tags with newlines before getting text
-                for br in cell.find_all("br"):
-                    br.replace_with("\n")
-                cell_text = cell.get_text().strip()
-
-                # Handle rowspan/colspan
-                rowspan = int(cell.get("rowspan", 1))
-                colspan = int(cell.get("colspan", 1))
-
-                # Add the cell to the row data
-                row_data.append(cell_text)
-
-                # Fill the grid for this cell and its rowspan/colspan
-                for i in range(rowspan):
-                    for j in range(colspan):
-                        if i == 0 and j == 0:
-                            continue  # Skip the main cell position
-                        # For rowspan cells, preserve the text in all spanned rows
-                        if j == 0 and i > 0:  # Only for cells directly below
-                            cell_grid[(row_idx + i, col_idx + j)] = cell_text
-                        else:
-                            cell_grid[(row_idx + i, col_idx + j)] = ""  # Mark other spans as empty
-
-                # If this is a header cell (th), mark it and its span
-                if cell.name == "th":
-                    # Mark columns as header columns
-                    for j in range(colspan):
-                        header_cols.add(col_idx + j)
-
-                    # For rowspan, mark spanned rows as part of header
-                    for i in range(1, rowspan):
-                        if row_idx + i < len(rows):
-                            header_rows.add(row_idx + i)
-
-                    # Record this header for all spanned columns
-                    for j in range(colspan):
-                        curr_col = col_idx + j
-                        if curr_col not in col_headers:
-                            col_headers[curr_col] = []
-                        col_headers[curr_col].append((row_idx, cell_text))
-
-                        # Store which columns are covered by this header
-                        if cell_text and colspan > 1:
-                            if cell_text not in col_span_info:
-                                col_span_info[cell_text] = set()
-                            col_span_info[cell_text].add(curr_col)
-
-                    # Store which rows are covered by this header for rowspan
-                    if cell_text and rowspan > 1:
-                        if cell_text not in row_span_info:
-                            row_span_info[cell_text] = set()
-                        for i in range(rowspan):
-                            row_span_info[cell_text].add(row_idx + i)
-
-                # Also handle row headers from data cells that have rowspan
-                if cell.name == "td" and rowspan > 1 and col_idx in header_cols:
-                    for i in range(1, rowspan):
-                        if row_idx + i < len(rows):
-                            if row_idx + i not in row_headers:
-                                row_headers[row_idx + i] = []
-                            row_headers[row_idx + i].append((col_idx, cell_text))
-
-                col_idx += colspan
-
-            # Pad the row if needed to handle different row lengths
-            table_data.append(row_data)
-
-        # Second pass: expand headers to cells that should inherit them
-        # First handle column headers
-        for header_text, columns in col_span_info.items():
-            for col in columns:
-                # Add this header to all columns it spans over
-                for row_idx in range(len(table_data)):
-                    if row_idx not in header_rows:  # Only apply to data rows
-                        for j in range(col, len(table_data[row_idx]) if row_idx < len(table_data) else 0):
-                            # Add header info to data cells in these columns
-                            if j not in col_headers:
-                                col_headers[j] = []
-                            if not any(h[1] == header_text for h in col_headers[j]):
-                                header_row = min([r for r, t in col_headers.get(col, [(0, "")])])
-                                col_headers[j].append((header_row, header_text))
-
-        # Handle row headers
-        for header_text, rows in row_span_info.items():
-            for row in rows:
-                if row < len(table_data):
-                    # Find first header column
-                    header_col = min(header_cols) if header_cols else 0
-                    if row not in row_headers:
-                        row_headers[row] = []
-                    if not any(h[1] == header_text for h in row_headers.get(row, [])):
-                        row_headers[row].append((header_col, header_text))
-
-        # Process regular row headers - each cell in a header column becomes a header for its row
-        for col_idx in header_cols:
-            for row_idx, row in enumerate(table_data):
-                if col_idx < len(row) and row[col_idx].strip():
-                    if row_idx not in row_headers:
-                        row_headers[row_idx] = []
-                    if not any(h[1] == row[col_idx] for h in row_headers.get(row_idx, [])):
-                        row_headers[row_idx].append((col_idx, row[col_idx]))
-
-        # Calculate max columns for padding
-        max_cols = max(len(row) for row in table_data) if table_data else 0
-
-        # Ensure all rows have the same number of columns
-        if table_data:
-            padded_data = [row + [""] * (max_cols - len(row)) for row in table_data]
-            table_array = np.array(padded_data)
-
-            # Create TableData object with the table and header information
-            parsed_tables.append(
-                TableData(data=table_array, header_rows=header_rows, header_cols=header_cols, col_headers=col_headers, row_headers=row_headers)
-            )
-
-    return parsed_tables
 
 
 @dataclass(kw_only=True)
@@ -618,6 +227,118 @@ class TextOrderTest(BasePDFTest):
 
 
 @dataclass
+class FormatTest(BasePDFTest):
+    """
+    Test to verify that specific text appears with the correct formatting.
+
+    Attributes:
+        text: The text to search for.
+        format: The expected format ("heading", "bold", or "italic").
+    """
+
+    text: str
+    format: str
+    case_sensitive: bool = True
+
+    def __post_init__(self):
+        super().__post_init__()
+        if self.type != TestType.FORMAT.value:
+            raise ValidationError(f"Invalid type for FormatTest: {self.type}")
+        self.text = normalize_text(self.text)
+        if not self.text.strip():
+            raise ValidationError("Text field cannot be empty")
+        if self.format not in {"heading", "bold", "italic"}:
+            raise ValidationError(f"Invalid format type: {self.format}. Must be 'heading', 'bold', or 'italic'")
+
+    def run(self, md_content: str) -> Tuple[bool, str]:
+        """
+        Extract all text with the specified format and check if our text is among them.
+        """
+        # Store the original content before any normalization for pattern matching
+        original_content = md_content
+
+        # Extract formatted text based on the format type
+        formatted_texts = []
+
+        if self.format == "heading":
+            # Markdown headings (# through ######)
+            heading_patterns = [
+                r"^#{1,6}\s+(.+?)$",  # Standard markdown headings
+            ]
+            for pattern in heading_patterns:
+                matches = re.findall(pattern, original_content, re.MULTILINE)
+                formatted_texts.extend(matches)
+
+            # HTML headings (<h1> through <h6>)
+            html_heading_pattern = r"<h[1-6][^>]*>(.*?)</h[1-6]>"
+            matches = re.findall(html_heading_pattern, original_content, re.IGNORECASE | re.DOTALL)
+            formatted_texts.extend(matches)
+
+        elif self.format == "bold":
+            # Markdown bold patterns
+            bold_patterns = [
+                r"\*\*(.*?)\*\*",  # **text**
+                r"__(.*?)__",  # __text__
+            ]
+            for pattern in bold_patterns:
+                matches = re.findall(pattern, original_content, re.DOTALL)
+                formatted_texts.extend(matches)
+
+            # HTML bold patterns
+            html_bold_patterns = [r"<b[^>]*>(.*?)</b>", r"<strong[^>]*>(.*?)</strong>"]  # <b>text</b>  # <strong>text</strong>
+            for pattern in html_bold_patterns:
+                matches = re.findall(pattern, original_content, re.IGNORECASE | re.DOTALL)
+                formatted_texts.extend(matches)
+
+        elif self.format == "italic":
+            # Markdown italic patterns - be careful not to match bold
+            # We need to match single * or _ that are not part of ** or __
+            italic_patterns = [
+                r"(?<!\*)\*(?!\*)(.*?)(?<!\*)\*(?!\*)",  # *text* but not **text**
+                r"(?<!_)_(?!_)(.*?)(?<!_)_(?!_)",  # _text_ but not __text__
+            ]
+            for pattern in italic_patterns:
+                matches = re.findall(pattern, original_content, re.DOTALL)
+                formatted_texts.extend(matches)
+
+            # HTML italic patterns
+            html_italic_patterns = [r"<i[^>]*>(.*?)</i>", r"<em[^>]*>(.*?)</em>"]  # <i>text</i>  # <em>text</em>
+            for pattern in html_italic_patterns:
+                matches = re.findall(pattern, original_content, re.IGNORECASE | re.DOTALL)
+                formatted_texts.extend(matches)
+
+        # Normalize all extracted formatted texts
+        normalized_formatted_texts = [normalize_text(text) for text in formatted_texts]
+
+        # Normalize the search text
+        search_text = self.text
+        if not self.case_sensitive:
+            search_text = search_text.lower()
+            normalized_formatted_texts = [text.lower() for text in normalized_formatted_texts]
+
+        # Check if the text appears in any of the formatted texts using fuzzy matching
+        threshold = 1.0 - (self.max_diffs / (len(search_text) if len(search_text) > 0 else 1))
+
+        for formatted_text in normalized_formatted_texts:
+            # Use partial_ratio for substring matching
+            ratio = fuzz.partial_ratio(search_text, formatted_text) / 100.0
+            if ratio >= threshold:
+                return True, ""
+
+        # If we didn't find the text with the specified format
+        found_formats = []
+        if len(normalized_formatted_texts) > 0:
+            # Show a sample of what we did find with this format
+            sample = normalized_formatted_texts[:3]
+            sample_str = ", ".join([f"'{t[:20]}...'" if len(t) > 20 else f"'{t}'" for t in sample])
+            found_formats.append(f"Found {self.format} text: {sample_str}")
+        else:
+            found_formats.append(f"No {self.format} formatted text found")
+
+        return False, f"Text '{self.text[:40]}...' not found with {self.format} formatting. {'; '.join(found_formats)}"
+
+
+@dataclass
 class TableTest(BasePDFTest):
     """
     Test to verify certain properties of a table are held, namely that some cells appear relative to other cells correctly
@@ -688,167 +409,63 @@ class TableTest(BasePDFTest):
 
         # Check each table
         for table_data in tables_to_check:
-            # Removed debug print statement
-            table_array = table_data.data
-            header_rows = table_data.header_rows
-            header_cols = table_data.header_cols
-
             # Find all cells that match the target cell using fuzzy matching
             matches = []
-            for i in range(table_array.shape[0]):
-                for j in range(table_array.shape[1]):
-                    cell_content = normalize_text(table_array[i, j])
-                    similarity = fuzz.ratio(self.cell, cell_content) / 100.0
+            for rowcol, cell_content in table_data.cell_text.items():
+                similarity = fuzz.ratio(self.cell, normalize_text(cell_content)) / 100.0
 
-                    if similarity >= threshold:
-                        matches.append((i, j))
+                if similarity >= threshold:
+                    matches.append(rowcol)
 
             # If no matches found in this table, continue to the next table
             if not matches:
                 continue
 
             # Check the relationships for each matching cell
-            for row_idx, col_idx in matches:
+            for rowcol in matches:
                 all_relationships_satisfied = True
                 current_failed_reasons = []
 
+                def _check_relationship(comparison_str: str, relation_func):
+                    nonlocal all_relationships_satisfied
+                    cur_relation_satisified = False
+                    best_similarity = 0
+                    best_similarity_text = None
+
+                    for rowcol_up in relation_func(rowcol):
+                        test_cell = normalize_text(table_data.cell_text[rowcol_up])
+                        test_similarity = fuzz.ratio(comparison_str, test_cell) / 100.0
+                        if test_similarity > best_similarity:
+                            best_similarity = test_similarity
+                            best_similarity_text = test_cell
+
+                        if test_similarity >= max(0.5, 1.0 - (self.max_diffs / (len(comparison_str) if len(comparison_str) > 0 else 1))):
+                            cur_relation_satisified = True
+
+                    if not cur_relation_satisified:
+                        all_relationships_satisfied = False
+                        current_failed_reasons.append(
+                            f"Cell compared to '{best_similarity_text}' doesn't match expected '{comparison_str}' (best similarity: {best_similarity:.2f})"
+                        )
+
                 # Check up relationship
-                if self.up and row_idx > 0:
-                    up_cell = normalize_text(table_array[row_idx - 1, col_idx])
-                    up_similarity = fuzz.ratio(self.up, up_cell) / 100.0
-                    if up_similarity < max(0.5, 1.0 - (self.max_diffs / (len(self.up) if len(self.up) > 0 else 1))):
-                        all_relationships_satisfied = False
-                        current_failed_reasons.append(f"Cell above '{up_cell}' doesn't match expected '{self.up}' (similarity: {up_similarity:.2f})")
+                if self.up:
+                    _check_relationship(self.up, lambda rowcol: table_data.up_relations[rowcol])
 
-                # Check down relationship
-                if self.down and row_idx < table_array.shape[0] - 1:
-                    down_cell = normalize_text(table_array[row_idx + 1, col_idx])
-                    down_similarity = fuzz.ratio(self.down, down_cell) / 100.0
-                    if down_similarity < max(0.5, 1.0 - (self.max_diffs / (len(self.down) if len(self.down) > 0 else 1))):
-                        all_relationships_satisfied = False
-                        current_failed_reasons.append(f"Cell below '{down_cell}' doesn't match expected '{self.down}' (similarity: {down_similarity:.2f})")
+                if self.down:
+                    _check_relationship(self.down, lambda rowcol: table_data.down_relations[rowcol])
 
-                # Check left relationship
-                if self.left and col_idx > 0:
-                    left_cell = normalize_text(table_array[row_idx, col_idx - 1])
-                    left_similarity = fuzz.ratio(self.left, left_cell) / 100.0
-                    if left_similarity < max(0.5, 1.0 - (self.max_diffs / (len(self.left) if len(self.left) > 0 else 1))):
-                        all_relationships_satisfied = False
-                        current_failed_reasons.append(
-                            f"Cell to the left '{left_cell}' doesn't match expected '{self.left}' (similarity: {left_similarity:.2f})"
-                        )
+                if self.left:
+                    _check_relationship(self.left, lambda rowcol: table_data.left_relations[rowcol])
 
-                # Check right relationship
-                if self.right and col_idx < table_array.shape[1] - 1:
-                    right_cell = normalize_text(table_array[row_idx, col_idx + 1])
-                    right_similarity = fuzz.ratio(self.right, right_cell) / 100.0
-                    if right_similarity < max(0.5, 1.0 - (self.max_diffs / (len(self.right) if len(self.right) > 0 else 1))):
-                        all_relationships_satisfied = False
-                        current_failed_reasons.append(
-                            f"Cell to the right '{right_cell}' doesn't match expected '{self.right}' (similarity: {right_similarity:.2f})"
-                        )
+                if self.right:
+                    _check_relationship(self.right, lambda rowcol: table_data.right_relations[rowcol])
 
-                # Check top heading relationship
-                if self.top_heading:
-                    # Try to find a match in the column headers
-                    top_heading_found = False
-                    best_match = ""
-                    best_similarity = 0
-
-                    # Check the col_headers dictionary first (this handles colspan properly)
-                    if col_idx in table_data.col_headers:
-                        for _, header_text in table_data.col_headers[col_idx]:
-                            header_text = normalize_text(header_text)
-                            similarity = fuzz.ratio(self.top_heading, header_text) / 100.0
-                            if similarity > best_similarity:
-                                best_similarity = similarity
-                                best_match = header_text
-                                if best_similarity >= max(0.5, 1.0 - (self.max_diffs / (len(self.top_heading) if len(self.top_heading) > 0 else 1))):
-                                    top_heading_found = True
-                                    break
-
-                    # If no match found in col_headers, fall back to checking header rows
-                    if not top_heading_found and header_rows:
-                        for i in sorted(header_rows):
-                            if i < row_idx and table_array[i, col_idx].strip():
-                                header_text = normalize_text(table_array[i, col_idx])
-                                similarity = fuzz.ratio(self.top_heading, header_text) / 100.0
-                                if similarity > best_similarity:
-                                    best_similarity = similarity
-                                    best_match = header_text
-                                    if best_similarity >= max(0.5, 1.0 - (self.max_diffs / (len(self.top_heading) if len(self.top_heading) > 0 else 1))):
-                                        top_heading_found = True
-                                        break
-
-                    # If still no match, use any non-empty cell above as a last resort
-                    if not top_heading_found and not best_match and row_idx > 0:
-                        for i in range(row_idx):
-                            if table_array[i, col_idx].strip():
-                                header_text = normalize_text(table_array[i, col_idx])
-                                similarity = fuzz.ratio(self.top_heading, header_text) / 100.0
-                                if similarity > best_similarity:
-                                    best_similarity = similarity
-                                    best_match = header_text
-
-                    if not best_match:
-                        all_relationships_satisfied = False
-                        current_failed_reasons.append(f"No top heading found for cell at ({row_idx}, {col_idx})")
-                    elif best_similarity < max(0.5, 1.0 - (self.max_diffs / (len(self.top_heading) if len(self.top_heading) > 0 else 1))):
-                        all_relationships_satisfied = False
-                        current_failed_reasons.append(
-                            f"Top heading '{best_match}' doesn't match expected '{self.top_heading}' (similarity: {best_similarity:.2f})"
-                        )
-
-                # Check left heading relationship
                 if self.left_heading:
-                    # Try to find a match in the row headers
-                    left_heading_found = False
-                    best_match = ""
-                    best_similarity = 0
+                    _check_relationship(self.left_heading, lambda rowcol: table_data.left_heading_relations(*rowcol))
 
-                    # Check the row_headers dictionary first (this handles rowspan properly)
-                    if row_idx in table_data.row_headers:
-                        for _, header_text in table_data.row_headers[row_idx]:
-                            header_text = normalize_text(header_text)
-                            similarity = fuzz.ratio(self.left_heading, header_text) / 100.0
-                            if similarity > best_similarity:
-                                best_similarity = similarity
-                                best_match = header_text
-                                if best_similarity >= max(0.5, 1.0 - (self.max_diffs / (len(self.left_heading) if len(self.left_heading) > 0 else 1))):
-                                    left_heading_found = True
-                                    break
-
-                    # If no match found in row_headers, fall back to checking header columns
-                    if not left_heading_found and header_cols:
-                        for j in sorted(header_cols):
-                            if j < col_idx and table_array[row_idx, j].strip():
-                                header_text = normalize_text(table_array[row_idx, j])
-                                similarity = fuzz.ratio(self.left_heading, header_text) / 100.0
-                                if similarity > best_similarity:
-                                    best_similarity = similarity
-                                    best_match = header_text
-                                    if best_similarity >= max(0.5, 1.0 - (self.max_diffs / (len(self.left_heading) if len(self.left_heading) > 0 else 1))):
-                                        left_heading_found = True
-                                        break
-
-                    # If still no match, use any non-empty cell to the left as a last resort
-                    if not left_heading_found and not best_match and col_idx > 0:
-                        for j in range(col_idx):
-                            if table_array[row_idx, j].strip():
-                                header_text = normalize_text(table_array[row_idx, j])
-                                similarity = fuzz.ratio(self.left_heading, header_text) / 100.0
-                                if similarity > best_similarity:
-                                    best_similarity = similarity
-                                    best_match = header_text
-
-                    if not best_match:
-                        all_relationships_satisfied = False
-                        current_failed_reasons.append(f"No left heading found for cell at ({row_idx}, {col_idx})")
-                    elif best_similarity < max(0.5, 1.0 - (self.max_diffs / (len(self.left_heading) if len(self.left_heading) > 0 else 1))):
-                        all_relationships_satisfied = False
-                        current_failed_reasons.append(
-                            f"Left heading '{best_match}' doesn't match expected '{self.left_heading}' (similarity: {best_similarity:.2f})"
-                        )
+                if self.top_heading:
+                    _check_relationship(self.top_heading, lambda rowcol: table_data.top_heading_relations(*rowcol))
 
                 # If all relationships are satisfied for this cell, the test passes
                 if all_relationships_satisfied:
@@ -996,6 +613,156 @@ class MathTest(BasePDFTest):
         return False, f"No match found for {self.math} anywhere in content"
 
 
+@dataclass
+class FootnoteTest(BasePDFTest):
+    """
+    Test to verify that footnotes appear correctly on a page.
+
+    Attributes:
+        marker: The footnote marker (e.g., "1", "2"). Must appear as superscript or [^marker]. Required.
+        appears_before_marker: Optional text that should appear before the marker (ignoring whitespace/non-alpha).
+        appears_after_marker: Optional text that should appear after the marker (ignoring whitespace/non-alpha).
+    """
+
+    marker: str
+    appears_before_marker: Optional[str] = None
+    appears_after_marker: Optional[str] = None
+
+    def __post_init__(self):
+        super().__post_init__()
+        if self.type != TestType.FOOTNOTE.value:
+            raise ValidationError(f"Invalid type for FootnoteTest: {self.type}")
+
+        # marker is required
+        if not self.marker:
+            raise ValidationError("marker field is required")
+
+        # Validate marker doesn't contain whitespace
+        if " " in self.marker:
+            raise ValidationError("Marker cannot contain whitespace")
+
+        # Normalize the optional text fields
+        if self.appears_before_marker:
+            self.appears_before_marker = normalize_text(self.appears_before_marker)
+            if not self.appears_before_marker.strip():
+                raise ValidationError("appears_before_marker field cannot be empty if provided")
+
+        if self.appears_after_marker:
+            self.appears_after_marker = normalize_text(self.appears_after_marker)
+            if not self.appears_after_marker.strip():
+                raise ValidationError("appears_after_marker field cannot be empty if provided")
+
+    def run(self, md_content: str) -> Tuple[bool, str]:
+        """
+        Run the footnote test on provided markdown content.
+
+        Args:
+            md_content: The markdown content to test.
+
+        Returns:
+            A tuple (passed, explanation) where 'passed' is True if the test passes,
+            and 'explanation' provides details when the test fails.
+        """
+        # Find all occurrences of the marker in various formats
+        marker_positions = []
+
+        # Check for markdown footnote reference [^marker] (but not definition [^marker]:)
+        markdown_pattern = rf"\[\^{re.escape(self.marker)}\](?!:)"
+        for match in re.finditer(markdown_pattern, md_content):
+            marker_positions.append({"start": match.start(), "end": match.end(), "type": "markdown"})
+
+        # Check for superscript HTML <sup>marker</sup>
+        html_sup_pattern = rf"<sup[^>]*>{re.escape(self.marker)}</sup>"
+        for match in re.finditer(html_sup_pattern, md_content, re.IGNORECASE):
+            marker_positions.append({"start": match.start(), "end": match.end(), "type": "html"})
+
+        # Check for Unicode superscript characters (for common digits)
+        superscript_map = {"0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴", "5": "⁵", "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹"}
+
+        # Convert marker to superscript if all characters are digits
+        if all(c in superscript_map for c in self.marker):
+            superscript_marker = "".join(superscript_map[c] for c in self.marker)
+            for match in re.finditer(re.escape(superscript_marker), md_content):
+                marker_positions.append({"start": match.start(), "end": match.end(), "type": "unicode"})
+
+        # If no markers found at all, fail
+        if not marker_positions:
+            return False, f"Footnote marker '{self.marker}' not found as [^{self.marker}], <sup>{self.marker}</sup>, or superscript"
+
+        # If no additional checks needed, pass
+        if not self.appears_before_marker and not self.appears_after_marker:
+            return True, ""
+
+        # Helper function to clean text for comparison (remove whitespace and non-alpha)
+        def clean_for_comparison(text):
+            # Remove all non-alphanumeric characters and normalize
+            return "".join(c for c in normalize_text(text) if c.isalnum()).lower()
+
+        # Check appears_before_marker if provided
+        before_found = False if self.appears_before_marker else True
+        if self.appears_before_marker:
+            clean_target_before = clean_for_comparison(self.appears_before_marker)
+            threshold = 1.0 - (self.max_diffs / (len(self.appears_before_marker) if len(self.appears_before_marker) > 0 else 1))
+
+            for pos in marker_positions:
+                # Get text before this marker position
+                start_pos = max(0, pos["start"] - 200)  # Look back up to 200 chars
+                text_before = md_content[start_pos : pos["start"]]
+
+                # Clean the text before for comparison
+                clean_text_before = clean_for_comparison(text_before)
+
+                # Check if appears_before_marker is at the end of this text (using fuzzy matching)
+                if clean_text_before:
+                    # Use partial_ratio to check if target appears at the end
+                    # We'll check the last portion that's roughly the size of our target
+                    check_length = min(len(clean_text_before), len(clean_target_before) * 2)
+                    text_to_check = clean_text_before[-check_length:] if check_length > 0 else clean_text_before
+
+                    similarity = fuzz.partial_ratio(clean_target_before, text_to_check) / 100.0
+                    if similarity >= threshold:
+                        before_found = True
+                        break
+
+        # Check appears_after_marker if provided
+        after_found = False if self.appears_after_marker else True
+        if self.appears_after_marker:
+            clean_target_after = clean_for_comparison(self.appears_after_marker)
+            threshold = 1.0 - (self.max_diffs / (len(self.appears_after_marker) if len(self.appears_after_marker) > 0 else 1))
+
+            for pos in marker_positions:
+                # Get text after this marker position
+                end_pos = min(len(md_content), pos["end"] + 200)  # Look ahead up to 200 chars
+                text_after = md_content[pos["end"] : end_pos]
+
+                # Clean the text after for comparison
+                clean_text_after = clean_for_comparison(text_after)
+
+                # Check if appears_after_marker is at the beginning of this text (using fuzzy matching)
+                if clean_text_after:
+                    # Use partial_ratio to check if target appears at the beginning
+                    # We'll check the first portion that's roughly the size of our target
+                    check_length = min(len(clean_text_after), len(clean_target_after) * 2)
+                    text_to_check = clean_text_after[:check_length] if check_length > 0 else clean_text_after
+
+                    similarity = fuzz.partial_ratio(clean_target_after, text_to_check) / 100.0
+                    if similarity >= threshold:
+                        after_found = True
+                        break
+
+        # Build failure message if needed
+        failures = []
+        if self.appears_before_marker and not before_found:
+            failures.append(f"Text '{self.appears_before_marker[:40]}...' not found before any occurrence of marker '{self.marker}'")
+        if self.appears_after_marker and not after_found:
+            failures.append(f"Text '{self.appears_after_marker[:40]}...' not found after any occurrence of marker '{self.marker}'")
+
+        if failures:
+            return False, "; ".join(failures)
+        else:
+            return True, ""
+
+
 def load_single_test(data: Union[str, Dict]) -> BasePDFTest:
     """
     Load a single test from a JSON line string or JSON object.
@@ -1029,6 +796,10 @@ def load_single_test(data: Union[str, Dict]) -> BasePDFTest:
         test = MathTest(**data)
     elif test_type == TestType.BASELINE.value:
         test = BaselineTest(**data)
+    elif test_type == TestType.FORMAT.value:
+        test = FormatTest(**data)
+    elif test_type == TestType.FOOTNOTE.value:
+        test = FootnoteTest(**data)
     else:
         raise ValidationError(f"Unknown test type: {test_type}")
 

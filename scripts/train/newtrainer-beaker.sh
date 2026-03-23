@@ -4,7 +4,7 @@ set -e
 
 # Parse command line arguments
 CONFIG="olmocr/train/configs/qwen25_vl_b100_x1_default.yaml"
-DATASET="s3://ai2-oe-data/jakep/olmocr/olmOCR-mix-0825"
+DATASET="s3://ai2-oe-data/jakep/olmocr/olmOCR-mix-1025"
 SKIP_DOCKER_BUILD=false
 PREEMPTIBLE=false
 
@@ -15,7 +15,8 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --dataset)
-            DATASET="$2"
+            # Strip trailing slashes from dataset path
+            DATASET="${2%/}"
             shift 2
             ;;
         --skip-docker-build)
@@ -102,10 +103,11 @@ b = Beaker.from_env(default_workspace="ai2/olmocr")
 dataset_name = dataset.rstrip('/').split('/')[-1]
 commands = [
     "pip install .[train]",
-    "pip install transformers==4.52.4",
-    "pip install flash-attn==2.8.0.post2 --no-build-isolation",
+    "pip install transformers==4.57.1",
+    "pip install flash-attn --no-build-isolation",
     "pip install s5cmd",
     f"s5cmd sync {dataset}/processed_* /data/{dataset_name}/",
+    "s5cmd sync s3://ai2-oe-data/jakep/olmocr/qwen2.5-vl-7b-olmocrv4_1epoch_promptv4_mix1025_more_rotation-8372/* /data/models/qwen2.5-vl-7b-olmocrv4_1epoch_promptv4_mix1025_more_rotation-8372",
     f"python -m olmocr.train.train --config {config}"
 ]
 
@@ -136,7 +138,6 @@ task_spec = TaskSpec(
         EnvVar(name="WANDB_API_KEY", secret="JAKE_WANDB_API_KEY")
     ],
     datasets=[
-        DataMount.new(mount_path="/weka/oe-data-default", weka="oe-data-default"),
         DataMount.new(mount_path="/weka/oe-training-default", weka="oe-training-default"),
     ]
 )

@@ -27,13 +27,20 @@ from tqdm import tqdm
 from olmocr.data.renderpdf import render_pdf_to_base64png
 from olmocr.filter import PdfFilter
 
-TARGET_IMAGE_DIM = 2048
+TARGET_IMAGE_DIM = 1024
+
+
+class TableInfo(BaseModel):
+    """Information about a single table."""
+
+    num_rows: int
+    num_cols: int
 
 
 class TableDetectionResponse(BaseModel):
     """Structured output for table detection."""
 
-    contains_table: bool
+    tables: list[TableInfo]
 
 
 def download_pdf_from_s3(s3_path: str, local_path: str) -> bool:
@@ -67,7 +74,29 @@ def download_pdf_from_s3(s3_path: str, local_path: str) -> bool:
         return False
 
 
-def check_for_table(pdf_path: str, page_num: int, api_key: str) -> Optional[bool]:
+def get_cell_count_bucket(total_cells: int) -> str:
+    """
+    Get the folder name for a given cell count, bucketed by powers of 2.
+
+    Args:
+        total_cells: Total number of cells across all tables
+
+    Returns:
+        str: Folder name like "0_cells", "1_cell", "2_cells", "4_cells", etc.
+    """
+    if total_cells == 0:
+        return "0_cells"
+    elif total_cells == 1:
+        return "1_cell"
+    else:
+        # Find the next power of 2 >= total_cells
+        power = 1
+        while power < total_cells:
+            power *= 2
+        return f"{power}_cells"
+
+
+def check_for_table(pdf_path: str, page_num: int, api_key: str) -> Optional[tuple[bool, int]]:
     """
     Use GPT-4o to check if a page contains a table.
 
@@ -77,7 +106,7 @@ def check_for_table(pdf_path: str, page_num: int, api_key: str) -> Optional[bool
         api_key: OpenAI API key
 
     Returns:
-        Optional[bool]: True if page contains a table, False otherwise, None if detection fails
+        Optional[tuple[bool, int]]: Tuple of (has_table, total_cells) or None if detection fails
     """
     # Initialize OpenAI client
     client = OpenAI(api_key=api_key)
@@ -86,19 +115,18 @@ def check_for_table(pdf_path: str, page_num: int, api_key: str) -> Optional[bool
         # Render the PDF page as an image (render_pdf_to_base64png is 1-indexed)
         image_base64 = render_pdf_to_base64png(pdf_path, page_num=page_num + 1, target_longest_image_dim=TARGET_IMAGE_DIM)
 
-        # Simple prompt asking about tables
-        prompt = "Does this page contain a table on it?"
+        # Prompt asking for detailed table information
+        prompt = "Identify all tables on this page. For each table, count the number of rows and columns. Return an empty list if there are no tables."
 
         response = client.beta.chat.completions.parse(
-            model="gpt-4o-2024-08-06",
+            model="gpt-5.1",
             messages=[
                 {
                     "role": "user",
                     "content": [{"type": "text", "text": prompt}, {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_base64}"}}],
                 }
             ],
-            temperature=0.1,
-            max_tokens=100,
+            max_completion_tokens=1000,
             response_format=TableDetectionResponse,
         )
 
@@ -113,12 +141,16 @@ def check_for_table(pdf_path: str, page_num: int, api_key: str) -> Optional[bool
             print(f"Failed to parse response for {pdf_path} page {page_num}")
             return None
 
-        has_table = parsed_response.contains_table
+        tables = parsed_response.tables
+        has_table = len(tables) > 0
+        total_cells = sum(table.num_rows * table.num_cols for table in tables)
 
         if has_table:
-            print(f"Found table in {pdf_path} page {page_num + 1}")
+            print(f"Found {len(tables)} table(s) in {pdf_path} page {page_num + 1}, total cells: {total_cells}")
+            for i, table in enumerate(tables, 1):
+                print(f"  Table {i}: {table.num_rows} rows × {table.num_cols} cols = {table.num_rows * table.num_cols} cells")
 
-        return has_table
+        return (has_table, total_cells)
 
     except Exception as e:
         print(f"Error checking {pdf_path} page {page_num}: {str(e)}")
@@ -166,15 +198,22 @@ def process_pdf(s3_path: str, temp_dir: str, output_dir: str, api_key: str) -> b
         page_num = random.choice([page_num, 0])  # Bias 50% of the time to do the first page
 
         # Check if the page contains a table
-        has_table = check_for_table(local_pdf_path, page_num, api_key)
+        result = check_for_table(local_pdf_path, page_num, api_key)
+
+        if result is None:
+            return False
+
+        has_table, total_cells = result
 
         if has_table:
-            # Extract just the page with the table and save it as a new PDF
-            os.makedirs(output_dir, exist_ok=True)
+            # Get the cell count bucket for organizing output
+            bucket_name = get_cell_count_bucket(total_cells)
+            bucket_dir = os.path.join(output_dir, bucket_name)
+            os.makedirs(bucket_dir, exist_ok=True)
 
             # Create output filename with basename_pgnum.pdf format
             pdf_basename = os.path.splitext(pdf_filename)[0]
-            output_pdf_path = os.path.join(output_dir, f"{pdf_basename}_pg{page_num+1}.pdf")
+            output_pdf_path = os.path.join(bucket_dir, f"{pdf_basename}_pg{page_num+1}.pdf")
 
             # Extract the single page
             writer = pypdf.PdfWriter()
@@ -184,7 +223,7 @@ def process_pdf(s3_path: str, temp_dir: str, output_dir: str, api_key: str) -> b
             with open(output_pdf_path, "wb") as output_file:
                 writer.write(output_file)
 
-            print(f"Extracted page {page_num+1} with table from {pdf_filename} to {os.path.basename(output_pdf_path)}")
+            print(f"Extracted page {page_num+1} with table from {pdf_filename} to {bucket_name}/{os.path.basename(output_pdf_path)}")
             return True
 
         return False
@@ -225,7 +264,7 @@ def main():
     print(f"Using reservoir sampling with size {reservoir_size}")
 
     with open(args.input_list, "r") as f:
-        for line in f:
+        for line in tqdm(f):
             n += 1
             path = line.strip()
             if not path:
