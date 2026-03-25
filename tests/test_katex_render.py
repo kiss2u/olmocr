@@ -216,3 +216,8 @@ class TestRenderedEquationComparison(unittest.TestCase):
             "s_{r,s}=\\begin{cases} 2 & \\text{if } r-s=2,4 \\text{ mod } 4, \\\\ 1 & \\text{if } r-s=1,3 \\text{ mod } 4. \\end{cases}", use_cache=False
         )
         self.assertTrue(compare_rendered_equations(eq1, eq2))
+
+    def test_arrow_vs_to(self):
+        eq1 = render_equation("\\to", use_cache=False)
+        eq2 = render_equation("\\rightarrow", use_cache=False)
+        self.assertTrue(compare_rendered_equations(eq1, eq2))
