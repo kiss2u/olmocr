@@ -117,7 +117,7 @@ def strip_thinking(text):
     m = re.match(r"^\s*<think>(.*?)</think>\s*", text, re.DOTALL)
     if not m:
         return text
-    return text[m.end():].strip()
+    return text[m.end() :].strip()
 
 
 def call_vllm(image_path, max_tokens=16384):
